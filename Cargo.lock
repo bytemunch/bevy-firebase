@@ -563,6 +563,9 @@ name = "bevy_firebase"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_macro_utils",
+ "crossbeam-channel",
+ "futures-lite",
  "oauth2",
  "pecs",
  "prost",

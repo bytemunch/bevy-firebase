@@ -305,11 +305,19 @@ pub mod firestore {
 
 pub mod bevy {
     use std::{
-        io::{BufRead, BufReader, Write, self},
-        net::TcpListener, time::Duration, thread::sleep,
+        io::{self, BufRead, BufReader, Write},
+        net::TcpListener,
+        thread::sleep,
+        time::Duration
+    };
+    
+
+    use bevy::{
+        prelude::*,
+        tasks::{AsyncComputeTaskPool, Task},
     };
 
-    use bevy::prelude::{App, Commands, DetectChanges, Plugin, Res, Resource};
+    
     use oauth2::{
         basic::BasicClient, reqwest::http_client, AuthUrl, AuthorizationCode, Client, ClientId,
         ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RevocationUrl,
@@ -317,7 +325,6 @@ pub mod bevy {
     };
     use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseCommandsExtension, PromiseLikeBase};
     use url::Url;
-
     pub struct BevyFirebasePlugin {
         pub firebase_api_key: String,
         pub google_client_id: String,
@@ -360,6 +367,9 @@ pub mod bevy {
     struct BevyFirebasePkce(PkceCodeVerifier);
 
     #[derive(Resource)]
+    struct BevyFirebaseRedirectTask(Task<Option<AuthorizationCode>>);
+
+    #[derive(Resource)]
     struct BevyFirebaseOauthClient(
         Client<
             oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>,
@@ -396,7 +406,9 @@ pub mod bevy {
                 // add startup system to prompt for login
                 app.add_startup_system(init_login)
                     .add_system(poll_authorize_url)
-                    .add_system(poll_pkce_and_auth);
+                    .add_system(poll_pkce_and_auth)
+                    .add_system(poll_redirect_task)
+                    .add_system(poll_id_token);
             }
         }
     }
@@ -410,14 +422,13 @@ pub mod bevy {
 
         // sets up redirect server
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener
-            .set_nonblocking(true)
-            .expect("No nonblocking here kk");
+        // listener
+        //     .set_nonblocking(true)
+        //     .expect("No nonblocking here kk");
         let port = listener.local_addr().unwrap().port();
 
-        // puts redirect server in resource
-        // commands.insert_resource(BevyFirebaseRedirectServer(listener));
         commands.insert_resource(BevyFirebaseRedirectPort(port));
+        // commands.insert_resource(BevyFirebaseRedirectServer(listener));
 
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
             .expect("Invalid authorization endpoint URL");
@@ -452,63 +463,90 @@ pub mod bevy {
 
         commands.insert_resource(BevyFirebaseAuthorizeUrl(authorize_url));
         commands.insert_resource(BevyFirebasePkce(pkce_code_verifier));
+        commands.insert_resource(BevyFirebaseOauthClient(client));
 
-        for stream in listener.incoming() {
-            println!("in tcp listener loop");
+        let thread_pool = AsyncComputeTaskPool::get();
 
-            match stream {
-                Ok(mut stream) => {
-                    {
-                        // pretty much a black box to me
-                        let mut reader = BufReader::new(&stream);
-                        let mut request_line = String::new();
-                        reader.read_line(&mut request_line).unwrap();
+        let task = thread_pool.spawn(async move {
+            let mut code: Option<AuthorizationCode> = None;
 
-                        let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // idk what this do
-                        let url =
-                            Url::parse(&("http://localhost".to_string() + redirect_url)).unwrap();
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(mut stream) => {
+                        println!("in tcp listener accept");
 
-                        let code_pair = url
-                            .query_pairs()
-                            .find(|pair| {
+                        {
+                            // pretty much a black box to me
+                            let mut reader = BufReader::new(&stream);
+                            let mut request_line = String::new();
+                            reader.read_line(&mut request_line).unwrap();
+
+                            let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // idk what this do
+                            let url = Url::parse(&("http://localhost".to_string() + redirect_url))
+                                .unwrap();
+
+                            let code_pair = url.query_pairs().find(|pair| {
                                 let &(ref key, _) = pair;
                                 key == "code"
-                            })
-                            .unwrap();
+                            });
 
-                        let (_, value) = code_pair;
+                            if code_pair.is_some() {
+                                println!("Code is some! {:?}", code_pair);
+                                let (_, value) = code_pair.unwrap();
 
-                        commands.insert_resource(BevyFirebaseGoogleAuthCode(
-                            AuthorizationCode::new(value.into_owned()),
-                        ));
+                                code = Some(AuthorizationCode::new(value.into_owned()));
+
+                                // TODO NEXT: tx/rx event streaming from inside async task. check bevy examples
+
+                                // commands.insert_resource(BevyFirebaseGoogleAuthCode(
+                                //     AuthorizationCode::new(value.into_owned()),
+                                // ));
+                            }
+                        }
+
+                        // message in browser
+                        // TODO allow user styling etc.
+                        let message = "Login Complete! You can close this window.";
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
+                            message.len(),
+                            message
+                        );
+                        stream.write_all(response.as_bytes()).unwrap();
+                        break;
                     }
-
-                    // message in browser
-                    // TODO allow user styling etc.
-                    let message = "Login Complete! You can close this window.";
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
-                        message.len(),
-                        message
-                    );
-                    stream.write_all(response.as_bytes()).unwrap();
-
-                    break;
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    // Decide if we should exit
-                    // break;
-                    // Decide if we should try to accept a connection again
-                    sleep(Duration::from_secs(1));
-                    continue;
-                }
-                Err(e) => {
-                    panic!("IO_ERR: {:?}", e);
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        // Decide if we should exit
+                        // break;
+                        // Decide if we should try to accept a connection again
+                        sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                    Err(e) => {
+                        panic!("IO_ERR: {:?}", e);
+                    }
                 }
             }
-        }
+
+            while code.is_none() {}
+
+            code
+        });
+
+        commands.insert_resource(BevyFirebaseRedirectTask(task));
 
         println!("T-init-end\n");
+    }
+
+    fn poll_redirect_task(task:Option<Res<BevyFirebaseRedirectTask>>) {
+        if let Some(task) = task {
+            if task.0.is_finished() {
+                
+                // task.0.cancel();
+                // TODO TODO TODO GET THE VALUE FROM THE FUTUREEEEEEeeeeeeee
+                println!("REDIR TASK FINITO");
+            }
+        }
     }
 
     fn poll_authorize_url(url: Option<Res<BevyFirebaseAuthorizeUrl>>) {
@@ -519,15 +557,39 @@ pub mod bevy {
         }
     }
 
+    #[derive(Resource)]
+    struct PkceAuthRunning;
+
     fn poll_pkce_and_auth(
         mut commands: Commands,
         pkce: Option<Res<BevyFirebasePkce>>,
         auth: Option<Res<BevyFirebaseGoogleAuthCode>>,
         client: Option<Res<BevyFirebaseOauthClient>>,
         id_token: Option<Res<BevyFirebaseIdToken>>,
+        running: Option<Res<PkceAuthRunning>>,
     ) {
-        if pkce.is_none() || auth.is_none() || client.is_none() || id_token.is_some() {
+        if pkce.is_none() {
+            println!("nopkce");
+        }
+
+        if auth.is_none() {
+            // println!("noauth");
+        }
+
+        if client.is_none() {
+            println!("noclient");
+        }
+
+        if running.is_some()
+            || pkce.is_none()
+            || auth.is_none()
+            || client.is_none()
+            || id_token.is_some()
+        {
             return;
+        } else {
+            println!("pcke auth polled");
+            commands.insert_resource(PkceAuthRunning);
         }
 
         let google_token = client
@@ -594,5 +656,11 @@ pub mod bevy {
         );
 
         // TODO if error, clear all token resources (logout)
+    }
+
+    fn poll_id_token(id_token: Option<Res<BevyFirebaseIdToken>>) {
+        if id_token.is_some() {
+            println!("ID TOKEN: {}", id_token.unwrap().0);
+        }
     }
 }
