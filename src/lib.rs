@@ -308,7 +308,7 @@ pub mod bevy {
 
     use bevy::prelude::{App, Commands, Plugin, Res, Resource};
     use oauth2::{AuthUrl, TokenUrl, basic::BasicClient, ClientId, ClientSecret, RedirectUrl, RevocationUrl, CsrfToken, Scope, PkceCodeChallenge, AuthorizationCode, reqwest::http_client, TokenResponse, PkceCodeVerifier};
-    use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseLikeBase};
+    use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseLikeBase, PromiseCommandsExtension};
     use url::Url;
 
     pub struct BevyFirebasePlugin {
@@ -408,8 +408,8 @@ pub mod bevy {
         // Redirect Server Bits
         let state = (AuthorizationCode::new("".into()),client,String::new(),PkceCodeVerifier::new("".into()));
 
-        commands.add(
-            Promise::new(state, asyn!(state, listener:Res<BevyFirebaseRedirectServer>, mut commands:Commands=>{
+        commands.promise(|| state)
+        .then(asyn!(state, listener:Res<BevyFirebaseRedirectServer>, mut commands:Commands=>{
                 // Google supports Proof Key for Code Exchange (PKCE - https://oauth.net/2/pkce/).
                 // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
                 let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -513,7 +513,7 @@ pub mod bevy {
                 let id_token = json.get("idToken").unwrap().as_str().unwrap();
 
                 commands.insert_resource(BevyFirebaseIdToken(id_token.into()));
-            }))
+            })
         );
 
         println!("T-init-end\n");
