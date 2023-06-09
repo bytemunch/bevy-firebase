@@ -304,11 +304,18 @@ pub mod firestore {
 }
 
 pub mod bevy {
-    use std::{net::TcpListener, io::{BufReader, Write, BufRead}, str::FromStr};
+    use std::{
+        io::{BufRead, BufReader, Write, self},
+        net::TcpListener, time::Duration, thread::sleep,
+    };
 
-    use bevy::prelude::{App, Commands, Plugin, Res, Resource};
-    use oauth2::{AuthUrl, TokenUrl, basic::BasicClient, ClientId, ClientSecret, RedirectUrl, RevocationUrl, CsrfToken, Scope, PkceCodeChallenge, AuthorizationCode, reqwest::http_client, TokenResponse, PkceCodeVerifier};
-    use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseLikeBase, PromiseCommandsExtension};
+    use bevy::prelude::{App, Commands, DetectChanges, Plugin, Res, Resource};
+    use oauth2::{
+        basic::BasicClient, reqwest::http_client, AuthUrl, AuthorizationCode, Client, ClientId,
+        ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RevocationUrl,
+        Scope, TokenResponse, TokenUrl,
+    };
+    use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseCommandsExtension, PromiseLikeBase};
     use url::Url;
 
     pub struct BevyFirebasePlugin {
@@ -329,22 +336,46 @@ pub mod bevy {
     struct BevyFirebaseApiKey(String);
 
     #[derive(Resource)]
-    struct BevyFirebaseIdToken(String);
-
-    #[derive(Resource)]
     struct BevyFirebaseRefreshToken(Option<String>);
 
     #[derive(Resource)]
-    struct BevyFirebaseProjectId(String);
+    struct BevyFirebaseIdToken(String);
 
     #[derive(Resource)]
-    struct BevyFirebaseRedirectServer(TcpListener);
+    struct BevyFirebaseProjectId(String);
 
     #[derive(Resource)]
     struct BevyFirebaseRedirectPort(u16);
 
     #[derive(Resource)]
     struct BevyFirebaseAuthorizeUrl(Url);
+
+    #[derive(Resource)]
+    struct BevyFirebaseGoogleToken(String);
+
+    #[derive(Resource)]
+    struct BevyFirebaseGoogleAuthCode(AuthorizationCode);
+
+    #[derive(Resource)]
+    struct BevyFirebasePkce(PkceCodeVerifier);
+
+    #[derive(Resource)]
+    struct BevyFirebaseOauthClient(
+        Client<
+            oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>,
+            oauth2::StandardTokenResponse<
+                oauth2::EmptyExtraTokenFields,
+                oauth2::basic::BasicTokenType,
+            >,
+            oauth2::basic::BasicTokenType,
+            oauth2::StandardTokenIntrospectionResponse<
+                oauth2::EmptyExtraTokenFields,
+                oauth2::basic::BasicTokenType,
+            >,
+            oauth2::StandardRevocableToken,
+            oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>,
+        >,
+    );
 
     impl Plugin for BevyFirebasePlugin {
         fn build(&self, app: &mut App) {
@@ -363,8 +394,9 @@ pub mod bevy {
                 .add_startup_system(refresh_login);
             } else {
                 // add startup system to prompt for login
-                app
-                .add_startup_system(init_login);
+                app.add_startup_system(init_login)
+                    .add_system(poll_authorize_url)
+                    .add_system(poll_pkce_and_auth);
             }
         }
     }
@@ -374,12 +406,17 @@ pub mod bevy {
         google_client_id: Res<BevyFirebaseGoogleClientId>,
         google_client_secret: Res<BevyFirebaseGoogleClientSecret>,
     ) {
+        // TODO this all off main thread
+
         // sets up redirect server
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_nonblocking(true)
+            .expect("No nonblocking here kk");
         let port = listener.local_addr().unwrap().port();
 
         // puts redirect server in resource
-        commands.insert_resource(BevyFirebaseRedirectServer(listener));
+        // commands.insert_resource(BevyFirebaseRedirectServer(listener));
         commands.insert_resource(BevyFirebaseRedirectPort(port));
 
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
@@ -394,8 +431,6 @@ pub mod bevy {
             auth_url,
             Some(token_url),
         )
-        // This example will be running its own server at localhost:{port}.
-        // See below for the server implementation.
         .set_redirect_uri(
             RedirectUrl::new(format!("http://localhost:{port}")).expect("Invalid redirect URL"),
         )
@@ -405,118 +440,134 @@ pub mod bevy {
                 .expect("Invalid revocation endpoint URL"),
         );
 
-        // Redirect Server Bits
-        let state = (AuthorizationCode::new("".into()),client,String::new(),PkceCodeVerifier::new("".into()));
+        // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
+        let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
 
-        commands.promise(|| state)
-        .then(asyn!(state, listener:Res<BevyFirebaseRedirectServer>, mut commands:Commands=>{
-                // Google supports Proof Key for Code Exchange (PKCE - https://oauth.net/2/pkce/).
-                // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
-                let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
+        // Generate the authorization URL to which we'll redirect the user.
+        let (authorize_url, _csrf_state) = client
+            .authorize_url(CsrfToken::new_random)
+            .add_scope(Scope::new("openid profile email".to_string()))
+            .set_pkce_challenge(pkce_code_challenge)
+            .url();
 
-                state.3 = pkce_code_verifier;
+        commands.insert_resource(BevyFirebaseAuthorizeUrl(authorize_url));
+        commands.insert_resource(BevyFirebasePkce(pkce_code_verifier));
 
-                // Generate the authorization URL to which we'll redirect the user.
-                let (authorize_url, _csrf_state) = state.1
-                    .authorize_url(CsrfToken::new_random)
-                    .add_scope(Scope::new("openid profile email".to_string()))
-                    .set_pkce_challenge(pkce_code_challenge)
-                    .url();
+        for stream in listener.incoming() {
+            println!("in tcp listener loop");
 
-                println!("GOTOURL: {}",authorize_url);
-                
-                match listener.0.accept() {
-                    Ok((mut stream, _addr)) => {
-                        {// pretty much a black box to me
-                            let mut reader = BufReader::new(&stream);
-                            let mut request_line = String::new();
-                            reader.read_line(&mut request_line).unwrap();
+            match stream {
+                Ok(mut stream) => {
+                    {
+                        // pretty much a black box to me
+                        let mut reader = BufReader::new(&stream);
+                        let mut request_line = String::new();
+                        reader.read_line(&mut request_line).unwrap();
 
-                            let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // idk what this do
-                            let url = Url::parse(&("http://localhost".to_string() + redirect_url)).unwrap();
+                        let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // idk what this do
+                        let url =
+                            Url::parse(&("http://localhost".to_string() + redirect_url)).unwrap();
 
-                            let code_pair = url
-                                .query_pairs()
-                                .find(|pair| {
-                                    let &(ref key, _) = pair;
-                                    key == "code"
-                                })
-                                .unwrap();
-    
-                            let (_, value) = code_pair;
-                            state.0 = AuthorizationCode::new(value.into_owned());
-                        }
+                        let code_pair = url
+                            .query_pairs()
+                            .find(|pair| {
+                                let &(ref key, _) = pair;
+                                key == "code"
+                            })
+                            .unwrap();
 
-                        // message in browser
-                        // TODO allow user styling etc.
-                        let message = "Login Complete! You can close this window.";
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
-                            message.len(),
-                            message
-                        );
-                        stream.write_all(response.as_bytes()).unwrap();
+                        let (_, value) = code_pair;
+
+                        commands.insert_resource(BevyFirebaseGoogleAuthCode(
+                            AuthorizationCode::new(value.into_owned()),
+                        ));
                     }
-                    Err(e) => {
-                        println!("ERR: {:?}",e);
-                    }
+
+                    // message in browser
+                    // TODO allow user styling etc.
+                    let message = "Login Complete! You can close this window.";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
+                        message.len(),
+                        message
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+
+                    break;
                 }
-
-                state.2 = authorize_url.into();
-
-                state
-            })).then(asyn!(state, mut commands: Commands=>{
-
-                // sends some signal to user to allow display of login link (???)
-                // watch for change on Res<BevyFirebaseAuthorizeUrl> ?
-                // puts auth url in resource
-                commands.insert_resource(BevyFirebaseAuthorizeUrl(Url::from_str(&*state.2).unwrap()));
-
-                // Exchange the code with a token.
-                let google_token = state.1
-                    .exchange_code(state.0.clone())
-                    .set_pkce_verifier(PkceCodeVerifier::new(state.3.secret().into()))
-                    .request(http_client);
-
-                state.2 = google_token.as_ref().unwrap().access_token().secret().into();
-
-                state
-
-                // TODO exchange google token for firebase token
-            }))
-            .then(asyn!(state,
-                firebase_api_key: Res<BevyFirebaseApiKey>,
-                port: Res<BevyFirebaseRedirectPort> => {
-                println!("T-then-2\n");
-
-                    let google_access_token = state.2.clone();
-
-                    asyn::http::post(format!(
-                        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}",
-                        firebase_api_key.0
-                    ))
-                    .header("content-type", "application/json")
-                    .body(format!(
-                        "{{\"postBody\":\"access_token={}&providerId={}\",
-                        \"requestUri\":\"http://127.0.0.1:{}\",
-                        \"returnIdpCredential\":true,
-                        \"returnSecureToken\":true}}",
-                        google_access_token, "google.com", port.0
-                    ))
-                    .send()
-            }))
-            .then(asyn!(_state, result, mut commands:Commands => {
-                println!("T-then-3\n");
-
-                let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
-
-                let id_token = json.get("idToken").unwrap().as_str().unwrap();
-
-                commands.insert_resource(BevyFirebaseIdToken(id_token.into()));
-            })
-        );
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    // Decide if we should exit
+                    // break;
+                    // Decide if we should try to accept a connection again
+                    sleep(Duration::from_secs(1));
+                    continue;
+                }
+                Err(e) => {
+                    panic!("IO_ERR: {:?}", e);
+                }
+            }
+        }
 
         println!("T-init-end\n");
+    }
+
+    fn poll_authorize_url(url: Option<Res<BevyFirebaseAuthorizeUrl>>) {
+        if let Some(url) = url {
+            if url.is_added() {
+                println!("Go to this URL to sign in:\n{}\n", url.0);
+            }
+        }
+    }
+
+    fn poll_pkce_and_auth(
+        mut commands: Commands,
+        pkce: Option<Res<BevyFirebasePkce>>,
+        auth: Option<Res<BevyFirebaseGoogleAuthCode>>,
+        client: Option<Res<BevyFirebaseOauthClient>>,
+        id_token: Option<Res<BevyFirebaseIdToken>>,
+    ) {
+        if pkce.is_none() || auth.is_none() || client.is_none() || id_token.is_some() {
+            return;
+        }
+
+        let google_token = client
+            .unwrap()
+            .0
+            .exchange_code(auth.unwrap().0.clone())
+            .set_pkce_verifier(PkceCodeVerifier::new(pkce.unwrap().0.secret().into()))
+            .request(http_client);
+
+        commands.insert_resource(BevyFirebaseGoogleToken(
+            google_token.unwrap().access_token().secret().into(),
+        ));
+
+        commands.promise(|| ()).then(asyn!(
+            |_,
+            firebase_api_key: Res<BevyFirebaseApiKey>,
+            port: Res<BevyFirebaseRedirectPort>,
+            google_access_token: Res<BevyFirebaseGoogleToken>| {
+                asyn::http::post(format!(
+                    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}",
+                    firebase_api_key.0
+                ))
+                .header("content-type", "application/json")
+                .body(format!(
+                    "{{\"postBody\":\"access_token={}&providerId={}\",
+                    \"requestUri\":\"http://127.0.0.1:{}\",
+                    \"returnIdpCredential\":true,
+                    \"returnSecureToken\":true}}",
+                    google_access_token.0, "google.com", port.0
+                ))
+                .send()
+            }
+        ))
+        .then(asyn!(_, result, mut commands:Commands => {
+            let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
+
+            let id_token = json.get("idToken").unwrap().as_str().unwrap();
+
+            commands.insert_resource(BevyFirebaseIdToken(id_token.into()));
+        }));
     }
 
     fn refresh_login(
