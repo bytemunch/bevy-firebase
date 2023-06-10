@@ -308,16 +308,15 @@ pub mod bevy {
         io::{self, BufRead, BufReader, Write},
         net::TcpListener,
         thread::sleep,
-        time::Duration
+        time::Duration,
     };
-    
 
     use bevy::{
         prelude::*,
         tasks::{AsyncComputeTaskPool, Task},
     };
 
-    
+    use futures_lite::future;
     use oauth2::{
         basic::BasicClient, reqwest::http_client, AuthUrl, AuthorizationCode, Client, ClientId,
         ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RevocationUrl,
@@ -366,8 +365,8 @@ pub mod bevy {
     #[derive(Resource)]
     struct BevyFirebasePkce(PkceCodeVerifier);
 
-    #[derive(Resource)]
-    struct BevyFirebaseRedirectTask(Task<Option<AuthorizationCode>>);
+    #[derive(Component)]
+    struct BevyFirebaseRedirectTask(Task<String>);
 
     #[derive(Resource)]
     struct BevyFirebaseOauthClient(
@@ -409,6 +408,8 @@ pub mod bevy {
                     .add_system(poll_pkce_and_auth)
                     .add_system(poll_redirect_task)
                     .add_system(poll_id_token);
+
+                // TODO state for logged in/ logged out/ doing login
             }
         }
     }
@@ -530,22 +531,34 @@ pub mod bevy {
 
             while code.is_none() {}
 
-            code
+            code.unwrap().secret().into()
         });
 
-        commands.insert_resource(BevyFirebaseRedirectTask(task));
+        commands
+            .spawn_empty()
+            .insert(BevyFirebaseRedirectTask(task));
 
         println!("T-init-end\n");
     }
 
-    fn poll_redirect_task(task:Option<Res<BevyFirebaseRedirectTask>>) {
-        if let Some(task) = task {
-            if task.0.is_finished() {
-                
-                // task.0.cancel();
-                // TODO TODO TODO GET THE VALUE FROM THE FUTUREEEEEEeeeeeeee
-                println!("REDIR TASK FINITO");
-            }
+    fn poll_redirect_task(mut commands: Commands, mut q_task: Query<(Entity, &mut BevyFirebaseRedirectTask)>) {
+
+        if q_task.is_empty() {
+            return
+        }
+
+        let (e, mut task) = q_task.single_mut();
+        if task.0.is_finished() {
+
+            commands.entity(e)
+            .despawn();
+
+            let access_token = future::block_on(future::poll_once(&mut task.0));
+            
+            // TODO TODO TODO GET THE VALUE FROM THE FUTUREEEEEEeeeeeeee
+            println!("REDIR TASK FINITO: {:?}",access_token);
+
+            commands.insert_resource(BevyFirebaseGoogleAuthCode(AuthorizationCode::new(access_token.unwrap())));
         }
     }
 
@@ -629,6 +642,8 @@ pub mod bevy {
             let id_token = json.get("idToken").unwrap().as_str().unwrap();
 
             commands.insert_resource(BevyFirebaseIdToken(id_token.into()));
+
+            // TODO cleanup other resources
         }));
     }
 
