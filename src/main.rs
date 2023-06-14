@@ -1,9 +1,6 @@
 use bevy::{prelude::*, diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}};
-use bevy_firebase::echo_test;
 
 fn main() {
-    echo_test("bananana".into());
-
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugin(LogDiagnosticsPlugin::default())
@@ -16,23 +13,5 @@ fn main() {
             // firebase_refresh_token: Some("REFRESH_TOKEN".into()),
             firebase_project_id: "test-auth-rs".into()
         })
-        // testing blocking
-        .add_startup_system(setup)
-        .add_system(second_counter)
         .run()
-}
-
-#[derive(Resource)]
-struct SecondCounter(Timer);
-
-fn setup(mut commands:Commands) {
-    commands.insert_resource(SecondCounter(Timer::from_seconds(0.5, TimerMode::Repeating)));
-}
-
-fn second_counter(mut timer:ResMut<SecondCounter>, time: Res<Time>) {
-    let delta = time.delta();
-    timer.0.tick(delta);
-    if timer.0.just_finished() {
-        println!("TIMER!");
-    }
 }
