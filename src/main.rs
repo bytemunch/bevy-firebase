@@ -8,7 +8,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugin(LogDiagnosticsPlugin::default())
         .add_plugin(FrameTimeDiagnosticsPlugin::default())
-        .add_plugin(bevy_firebase::bevy::BevyFirebasePlugin {
+        .add_plugin(bevy_firebase::auth::AuthPlugin {
             firebase_api_key: "FIREBASE_API_KEY".into(),
             google_client_id:
                 "CLIENT_ID_STRING.apps.googleusercontent.com".into(),

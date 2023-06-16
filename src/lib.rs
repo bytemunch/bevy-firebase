@@ -1,10 +1,26 @@
 mod googleapis;
 
 pub mod firestore {
-    // TODO firestore access functions
+    use bevy::prelude::*;
+    use tonic::transport::Channel;
+
+    #[derive(Resource)]
+    struct FirestoreClient(Channel);
+
+    struct FirestorePlugin {
+
+    }
+
+    impl Plugin for FirestorePlugin {
+        fn build(&self, _app: &mut App) {
+            // TODO create gRPC tonic client
+            // TODO add client to app as resource
+            // TODO refresh client token when app token is refreshed
+        }
+    }
 }
 
-pub mod bevy {
+pub mod auth {
     use std::{
         io::{self, BufRead, BufReader, Write},
         net::TcpListener,
@@ -20,7 +36,7 @@ pub mod bevy {
     use futures_lite::future;
     use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseCommandsExtension, PromiseLikeBase};
     use url::Url;
-    pub struct BevyFirebasePlugin {
+    pub struct AuthPlugin {
         pub firebase_api_key: String,
         pub google_client_id: String,
         pub google_client_secret: String,
@@ -61,7 +77,7 @@ pub mod bevy {
     #[derive(Component)]
     struct RedirectTask(Task<String>);
 
-    impl Plugin for BevyFirebasePlugin {
+    impl Plugin for AuthPlugin {
         fn build(&self, app: &mut App) {
 
             // allow user to read keys from file
