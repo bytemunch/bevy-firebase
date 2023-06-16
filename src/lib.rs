@@ -64,7 +64,7 @@ pub mod bevy {
     impl Plugin for BevyFirebasePlugin {
         fn build(&self, app: &mut App) {
 
-            // TODO read keys from file
+            // allow user to read keys from file
             // TODO optionally save refresh token to file
 
             app.add_plugin(PecsPlugin)
@@ -102,7 +102,7 @@ pub mod bevy {
 
         commands.insert_resource(RedirectPort(port));
 
-        let authorize_url = Url::parse(&*format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, google_client_id.0)).unwrap();
+        let authorize_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, google_client_id.0)).unwrap();
 
         commands.insert_resource(AuthorizeUrl(authorize_url));
 
@@ -127,15 +127,12 @@ pub mod bevy {
                                 .unwrap();
 
                             let code_pair = url.query_pairs().find(|pair| {
-                                let &(ref key, _) = pair;
+                                let (key, _) = pair;
                                 key == "code"
                             });
 
-                            if code_pair.is_some() {
-                                println!("Code is some! {:?}", code_pair);
-                                let (_, value) = code_pair.unwrap();
-
-                                code = Some(value.into_owned());
+                            if let Some(code_pair) = code_pair {
+                                code = Some(code_pair.1.into_owned());
                             }
                         }
 
@@ -189,7 +186,7 @@ pub mod bevy {
                 google_client_secret: Res<GoogleClientSecret>,
                 google_client_id: Res<GoogleClientId>,
                 redirect_port: Res<RedirectPort>|{
-                asyn::http::post(format!("https://www.googleapis.com/oauth2/v3/token"))
+                asyn::http::post("https://www.googleapis.com/oauth2/v3/token")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(format!("code={}&client_id={}&client_secret={}&redirect_uri=http://127.0.0.1:{}&grant_type=authorization_code",auth_code.value,google_client_id.0, google_client_secret.0, redirect_port.0))
                 .send()
@@ -267,11 +264,10 @@ pub mod bevy {
     }
 
     fn poll_id_token(id_token: Option<Res<IdToken>>) {
-        if id_token.is_some() {
-            let id_token = id_token.unwrap();
-            if id_token.is_added() {
-              println!("ID TOKEN: {}", id_token.0);
-            }
+        if let Some(token) = id_token {
+            if token.is_added() {
+                println!("ID TOKEN: {}", token.0);
+              }
         }
     }
 }
