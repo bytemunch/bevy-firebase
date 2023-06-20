@@ -1,13 +1,10 @@
-use bevy::{
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    prelude::*,
-};
+use bevy::prelude::*;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugin(LogDiagnosticsPlugin::default())
-        .add_plugin(FrameTimeDiagnosticsPlugin::default())
+        // .add_plugin(LogDiagnosticsPlugin::default())
+        // .add_plugin(FrameTimeDiagnosticsPlugin::default())
         .add_plugin(bevy_firebase::auth::AuthPlugin {
             firebase_api_key: "FIREBASE_API_KEY".into(),
             google_client_id:
@@ -17,5 +14,6 @@ fn main() {
             // firebase_refresh_token: Some("REFRESH_TOKEN".into()),
             firebase_project_id: "test-auth-rs".into(),
         })
+        .add_plugin(bevy_firebase::firestore::FirestorePlugin)
         .run()
 }
