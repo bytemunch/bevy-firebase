@@ -7,11 +7,8 @@ pub mod firestore {
     use crate::{
         auth::IdToken, googleapis::google::firestore::v1::firestore_client::FirestoreClient,
     };
-    use bevy::{
-        prelude::*,
-        tasks::{AsyncComputeTaskPool, Task},
-    };
-    use futures_lite::future;
+    use bevy::{prelude::*, tasks::Task};
+    use bevy_tokio_tasks::TokioTasksRuntime;
     use tonic::{
         codegen::InterceptedService,
         metadata::{Ascii, MetadataValue},
@@ -21,6 +18,9 @@ pub mod firestore {
 
     #[derive(Resource)]
     struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, AuthInterceptor>>);
+
+    #[derive(Resource)]
+    struct BevyFirebaseCreateClientRunning(bool);
 
     #[derive(Component)]
     struct BevyFirestoreChannelTask(Task<Channel>);
@@ -45,35 +45,39 @@ pub mod firestore {
 
     impl Plugin for FirestorePlugin {
         fn build(&self, app: &mut App) {
-            // TODO create gRPC tonic client
-            // TODO add client to app as resource
             // TODO refresh client token when app token is refreshed
-            app.add_system(poll_id_token)
-                .add_system(poll_channel_task)
+            app.add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+                .add_startup_system(init)
+                .add_system(create_client)
                 .add_system(poll_client_added);
         }
     }
 
-    fn poll_id_token(
+    fn init(mut commands: Commands) {
+        commands.insert_resource(BevyFirebaseCreateClientRunning(false));
+    }
+
+    fn create_client(
         mut commands: Commands,
+        runtime: ResMut<TokioTasksRuntime>,
+        client: Option<Res<BevyFirestoreClient>>,
         id_token: Option<Res<IdToken>>,
-        firestore_client: Option<Res<BevyFirestoreClient>>,
-        q_firestore_channel_task: Query<&BevyFirestoreChannelTask>,
+        running: Res<BevyFirebaseCreateClientRunning>,
     ) {
-        // check for ID token && NOT FirestoreClient && && NOT already spawned a channel task
-        if id_token.is_none() || firestore_client.is_some() || !q_firestore_channel_task.is_empty()
-        {
+        // IF CLIENT || NO ID TOKEN || ALREADY RUNNING
+        //  RETURN
+        if client.is_some() || id_token.is_none() || running.0 {
             return;
         }
 
-        println!("\nSpawned channel task!\n");
+        let id_token = id_token.unwrap().0.clone();
+        // SET ALREADY RUNNING
+        commands.insert_resource(BevyFirebaseCreateClientRunning(true));
+        // CREATE BG TASK TO INSERT CLIENT AS RESOURCE
+        runtime.spawn_background_task(|mut ctx| async move {
+            let bearer_token = format!("Bearer {}", id_token);
+            let header_value: MetadataValue<_> = bearer_token.parse().unwrap();
 
-        // If we got those, create task entity that creates the channel
-        // that is polled by poll_channel_task
-
-        let thread_pool = AsyncComputeTaskPool::get();
-
-        let task = thread_pool.spawn(async move {
             let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
             let certs = read_to_string(data_dir.join("gcp/gtsr1.pem")).unwrap();
 
@@ -88,47 +92,14 @@ pub mod firestore {
                 .await
                 .unwrap();
 
-            println!("\nGot Channel! {:?}", channel);
+            let service =
+                FirestoreClient::with_interceptor(channel, AuthInterceptor { header_value });
 
-            channel
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.insert_resource(BevyFirestoreClient(service));
+            })
+            .await;
         });
-
-        commands
-            .spawn_empty()
-            .insert(BevyFirestoreChannelTask(task));
-    }
-
-    fn poll_channel_task(
-        mut commands: Commands,
-        firestore_client: Option<Res<BevyFirestoreClient>>,
-        id_token: Option<Res<IdToken>>,
-        mut q_task: Query<(Entity, &mut BevyFirestoreChannelTask)>,
-    ) {
-        if q_task.is_empty() || firestore_client.is_some() {
-            return;
-        }
-
-        if let Some(token) = id_token {
-            println!("\nCreating client!\n");
-
-            let (e, mut task) = q_task.single_mut();
-
-            if task.0.is_finished() {
-                commands.entity(e).despawn();
-
-                let channel = future::block_on(future::poll_once(&mut task.0));
-
-                let bearer_token = format!("Bearer {}", token.0);
-                let header_value: MetadataValue<_> = bearer_token.parse().unwrap();
-
-                let service = FirestoreClient::with_interceptor(
-                    channel.unwrap(),
-                    AuthInterceptor { header_value },
-                );
-
-                commands.insert_resource(BevyFirestoreClient(service));
-            }
-        }
     }
 
     fn poll_client_added(client: Option<Res<BevyFirestoreClient>>) {
@@ -233,6 +204,8 @@ pub mod auth {
         let authorize_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, google_client_id.0)).unwrap();
 
         commands.insert_resource(AuthorizeUrl(authorize_url));
+
+        // TODO use bevy-tokio-tasks here
 
         let thread_pool = AsyncComputeTaskPool::get();
 
