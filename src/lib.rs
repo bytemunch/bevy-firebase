@@ -1,30 +1,48 @@
 mod googleapis;
 
+// re-exports
+// TODO find out if this is the right way of doing things
+pub mod deps {
+    use crate::googleapis;
+
+    pub use tonic::Status;
+
+    pub use googleapis::google::firestore::v1::{value::ValueType, Value};
+}
+
 pub mod firestore {
 
-    use std::{fs::read_to_string, path::PathBuf};
+    use std::{collections::HashMap, fs::read_to_string, path::PathBuf};
 
     use crate::{
-        auth::IdToken, googleapis::google::firestore::v1::firestore_client::FirestoreClient,
+        auth::{IdToken, UserId},
+        googleapis::google::firestore::v1::{
+            firestore_client::FirestoreClient, CreateDocumentRequest, DeleteDocumentRequest,
+            Document, GetDocumentRequest, UpdateDocumentRequest, Value,
+        },
     };
-    use bevy::{prelude::*, tasks::Task};
+    use bevy::prelude::*;
+
     use bevy_tokio_tasks::TokioTasksRuntime;
+
     use tonic::{
         codegen::InterceptedService,
         metadata::{Ascii, MetadataValue},
         service::Interceptor,
         transport::{Certificate, Channel, ClientTlsConfig},
+        Response, Status,
     };
 
-    #[derive(Resource)]
-    struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, AuthInterceptor>>);
+    #[derive(Resource, Clone)]
+    pub struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, AuthInterceptor>>);
 
     #[derive(Resource)]
     struct BevyFirebaseCreateClientRunning(bool);
 
-    #[derive(Component)]
-    struct BevyFirestoreChannelTask(Task<Channel>);
+    #[derive(Resource, Clone)]
+    struct EmulatorUrl(String);
 
+    #[derive(Clone)]
     struct AuthInterceptor {
         header_value: MetadataValue<Ascii>,
     }
@@ -41,15 +59,23 @@ pub mod firestore {
         }
     }
 
-    pub struct FirestorePlugin;
+    pub struct FirestorePlugin {
+        pub emulator_url: Option<String>,
+    }
 
     impl Plugin for FirestorePlugin {
         fn build(&self, app: &mut App) {
             // TODO refresh client token when app token is refreshed
+
+            // TODO don't add tokio plugin here, poll for it and run init after runtime is added
             app.add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
                 .add_startup_system(init)
                 .add_system(create_client)
                 .add_system(poll_client_added);
+
+            if self.emulator_url.is_some() {
+                app.insert_resource(EmulatorUrl(self.emulator_url.clone().unwrap()));
+            }
         }
     }
 
@@ -62,17 +88,23 @@ pub mod firestore {
         runtime: ResMut<TokioTasksRuntime>,
         client: Option<Res<BevyFirestoreClient>>,
         id_token: Option<Res<IdToken>>,
+        uid: Option<Res<UserId>>,
         running: Res<BevyFirebaseCreateClientRunning>,
+        emulator: Option<Res<EmulatorUrl>>,
     ) {
-        // IF CLIENT || NO ID TOKEN || ALREADY RUNNING
-        //  RETURN
-        if client.is_some() || id_token.is_none() || running.0 {
+        if running.0 || client.is_some() || id_token.is_none() || uid.is_none() {
             return;
         }
 
         let id_token = id_token.unwrap().0.clone();
-        // SET ALREADY RUNNING
+
         commands.insert_resource(BevyFirebaseCreateClientRunning(true));
+
+        let emulator_url = match emulator {
+            Some(e) => Some(e.0.clone()),
+            None => None,
+        };
+
         // CREATE BG TASK TO INSERT CLIENT AS RESOURCE
         runtime.spawn_background_task(|mut ctx| async move {
             let bearer_token = format!("Bearer {}", id_token);
@@ -81,16 +113,24 @@ pub mod firestore {
             let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
             let certs = read_to_string(data_dir.join("gcp/gtsr1.pem")).unwrap();
 
-            let tls_config = ClientTlsConfig::new()
-                .ca_certificate(Certificate::from_pem(certs))
-                .domain_name("firestore.googleapis.com");
+            let channel = if emulator_url.is_none() {
+                let tls_config = ClientTlsConfig::new()
+                    .ca_certificate(Certificate::from_pem(certs))
+                    .domain_name("firestore.googleapis.com");
 
-            let channel = Channel::from_static("https://firestore.googleapis.com")
-                .tls_config(tls_config)
-                .unwrap()
-                .connect()
-                .await
-                .unwrap();
+                Channel::from_static("https://firestore.googleapis.com")
+                    .tls_config(tls_config)
+                    .unwrap()
+                    .connect()
+                    .await
+                    .unwrap()
+            } else {
+                Channel::from_shared(emulator_url.unwrap())
+                    .unwrap()
+                    .connect()
+                    .await
+                    .unwrap()
+            };
 
             let service =
                 FirestoreClient::with_interceptor(channel, AuthInterceptor { header_value });
@@ -102,12 +142,186 @@ pub mod firestore {
         });
     }
 
-    fn poll_client_added(client: Option<Res<BevyFirestoreClient>>) {
+    fn poll_client_added(client: Option<ResMut<BevyFirestoreClient>>) {
         if let Some(client) = client {
-            if client.is_added() {
-                println!("\nCLIENT ADDED!: {:?}\n", client.0);
+            if !client.is_added() {
+                return;
             }
+
+            println!("Client added! {:?}\n", client.0)
         }
+    }
+
+    pub async fn create_document(
+        client: &mut BevyFirestoreClient,
+        project_id: &String,
+        document_id: &String,
+        collection_id: &String,
+        document_data: HashMap<String, Value>,
+    ) -> Result<tonic::Response<Document>, tonic::Status> {
+        client
+            .0
+            .create_document(CreateDocumentRequest {
+                parent: format!("projects/{project_id}/databases/(default)/documents"),
+                collection_id: collection_id.into(),
+                document_id: document_id.into(),
+                document: Some(Document {
+                    fields: document_data,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub async fn update_document(
+        client: &mut BevyFirestoreClient,
+        project_id: &String,
+        document_path: &String,
+        document_data: HashMap<String, Value>,
+    ) -> Result<tonic::Response<Document>, tonic::Status> {
+        client
+            .0
+            .update_document(UpdateDocumentRequest {
+                document: Some(Document {
+                    name: format!(
+                        "projects/{project_id}/databases/(default)/documents/{document_path}"
+                    ),
+                    fields: document_data,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub async fn read_document(
+        client: &mut BevyFirestoreClient,
+        project_id: &String,
+        document_path: &String,
+    ) -> Result<tonic::Response<Document>, tonic::Status> {
+        client
+            .0
+            .get_document(GetDocumentRequest {
+                name: format!(
+                    "projects/{project_id}/databases/(default)/documents/{document_path}"
+                ),
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub async fn delete_document(
+        client: &mut BevyFirestoreClient,
+        project_id: &String,
+        document_path: &String,
+    ) -> Result<Response<()>, Status> {
+        client
+            .0
+            .delete_document(DeleteDocumentRequest {
+                name: format!(
+                    "projects/{project_id}/databases/(default)/documents/{document_path}"
+                ),
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub fn create_document_sync(
+        mut client: BevyFirestoreClient,
+        runtime: &ResMut<TokioTasksRuntime>,
+        project_id: String,
+        document_id: String,
+        collection_id: String,
+        document_data: HashMap<String, Value>,
+    ) {
+        runtime.spawn_background_task(|_ctx| async move {
+            let res = client
+                .0
+                .create_document(CreateDocumentRequest {
+                    parent: format!("projects/{project_id}/databases/(default)/documents"),
+                    collection_id,
+                    document_id,
+                    document: Some(Document {
+                        fields: document_data,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await;
+
+            // TODO sync fns return results to bevy somehow
+            // run_on_main_thread(|ctx| {ctx.world.insertResource::<BevyFirebaseResult(res)>()?})
+            println!("\n\ndata created: {:?}\n", res);
+        });
+    }
+
+    pub fn delete_document_sync(
+        mut client: BevyFirestoreClient,
+        runtime: &ResMut<TokioTasksRuntime>,
+        project_id: String,
+        document_path: String,
+    ) {
+        runtime.spawn_background_task(|_ctx| async move {
+            let res = client
+                .0
+                .delete_document(DeleteDocumentRequest {
+                    name: format!(
+                        "projects/{project_id}/databases/(default)/documents/{document_path}"
+                    ),
+                    ..Default::default()
+                })
+                .await;
+
+            println!("data deleted: {:?}\n", res);
+        });
+    }
+
+    pub fn update_document_sync(
+        mut client: BevyFirestoreClient,
+        runtime: &ResMut<TokioTasksRuntime>,
+        project_id: String,
+        document_path: String,
+        document_data: HashMap<String, Value>,
+    ) {
+        runtime.spawn_background_task(|_ctx| async move {
+            let res = client
+                .0
+                .update_document(UpdateDocumentRequest {
+                    document: Some(Document {
+                        name: format!(
+                            "projects/{project_id}/databases/(default)/documents/{document_path}"
+                        ),
+                        fields: document_data,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await;
+
+            println!("data updated: {:?}\n", res);
+        });
+    }
+
+    pub fn read_document_sync(
+        mut client: BevyFirestoreClient,
+        runtime: &ResMut<TokioTasksRuntime>,
+        project_id: String,
+        document_path: String,
+    ) {
+        runtime.spawn_background_task(|_ctx| async move {
+            let res = client
+                .0
+                .get_document(GetDocumentRequest {
+                    name: format!(
+                        "projects/{project_id}/databases/(default)/documents/{document_path}"
+                    ),
+                    ..Default::default()
+                })
+                .await;
+
+            println!("data read: {:?}\n", res);
+        });
     }
 }
 
@@ -135,6 +349,8 @@ pub mod auth {
         pub firebase_project_id: String,
     }
 
+    // TODO super-struct this stuff, make pub only needed fields
+
     #[derive(Resource)]
     struct GoogleClientId(String);
 
@@ -151,7 +367,10 @@ pub mod auth {
     pub struct IdToken(pub String);
 
     #[derive(Resource)]
-    struct ProjectId(String);
+    pub struct UserId(pub String);
+
+    #[derive(Resource)]
+    pub struct ProjectId(pub String);
 
     #[derive(Resource)]
     struct RedirectPort(u16);
@@ -310,11 +529,14 @@ pub mod auth {
                 }
             ))
             .then(asyn!(_, result, mut commands:Commands => {
+                // TODO dry
                 let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
 
                 let id_token = json.get("idToken").unwrap().as_str().unwrap();
+                let uid = json.get("localId").unwrap().as_str().unwrap();
 
                 commands.insert_resource(IdToken(id_token.into()));
+                commands.insert_resource(UserId(uid.into()));
                 // TODO cleanup other resources
             }));
         }
@@ -345,11 +567,16 @@ pub mod auth {
                 .send()
             }))
             .then(asyn!(_state, result, mut commands:Commands=>{
+                // TODO dry
+                // TODO dry     lol
                 let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
 
                 let id_token = json.get("id_token").unwrap().as_str().unwrap();
+                let uid = json.get("user_id").unwrap().as_str().unwrap();
 
                 commands.insert_resource(IdToken(id_token.into()));
+                commands.insert_resource(UserId(uid.into()));
+                // TODO cleanup other resources
             }))
         );
 
@@ -359,7 +586,7 @@ pub mod auth {
     fn poll_id_token(id_token: Option<Res<IdToken>>) {
         if let Some(token) = id_token {
             if token.is_added() {
-                println!("ID TOKEN: {}", token.0);
+                println!("ID TOKEN: {}\n", token.0);
             }
         }
     }
