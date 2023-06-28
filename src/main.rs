@@ -5,7 +5,8 @@ use bevy_firebase::{
     auth::{ProjectId, UserId},
     deps::{Status, Value, ValueType},
     firestore::{
-        create_document, delete_document, read_document, update_document, BevyFirestoreClient,
+        add_listener, create_document, delete_document, read_document, update_document,
+        BevyFirestoreClient, MyTestEvent,
     },
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
@@ -29,10 +30,18 @@ fn main() {
             firebase_project_id: "test-auth-rs".into(),
         })
         .add_plugin(bevy_firebase::firestore::FirestorePlugin {
+            // emulator_url: None
             emulator_url: Some("http://127.0.0.1:8080".into())
         })
         .add_system(test_firestore_operations)
+        .add_system(test_listener_system)
         .run();
+}
+
+fn test_listener_system(mut er: EventReader<MyTestEvent>) {
+    for ev in er.iter() {
+        println!("EVENT! {:?}", ev.0.msg);
+    }
 }
 
 fn test_firestore_operations(
@@ -58,9 +67,18 @@ fn test_firestore_operations(
         let mut client = client.clone();
         let project_id = project_id.0.clone();
         let uid = uid.0.clone();
+        let document_path = &format!("lobbies/{}", uid);
+
+        add_listener(
+            &runtime,
+            &mut client,
+            project_id.clone(),
+            document_path.clone(),
+        );
 
         runtime.spawn_background_task(|mut ctx| async move {
             let document_path = &format!("lobbies/{}", uid);
+
             create_document(
                 &mut client,
                 &project_id,
@@ -69,6 +87,7 @@ fn test_firestore_operations(
                 data.clone(),
             )
             .await?;
+            // TODO fails silently
 
             let read = read_document(&mut client, &project_id, document_path).await;
             println!("READ 1: {:?}\n", read);

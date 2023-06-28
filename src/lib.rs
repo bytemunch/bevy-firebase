@@ -15,26 +15,32 @@ pub mod firestore {
     use std::{collections::HashMap, fs::read_to_string, path::PathBuf};
 
     use crate::{
-        auth::{IdToken, UserId},
+        auth::{IdToken, ProjectId, UserId},
         googleapis::google::firestore::v1::{
-            firestore_client::FirestoreClient, CreateDocumentRequest, DeleteDocumentRequest,
-            Document, GetDocumentRequest, UpdateDocumentRequest, Value,
+            firestore_client::FirestoreClient,
+            listen_request::TargetChange,
+            target::{DocumentsTarget, TargetType},
+            CreateDocumentRequest, DeleteDocumentRequest, Document, GetDocumentRequest,
+            ListenRequest, ListenResponse, Target, UpdateDocumentRequest, Value,
         },
     };
     use bevy::prelude::*;
 
     use bevy_tokio_tasks::TokioTasksRuntime;
 
+    use futures_lite::{stream, StreamExt};
     use tonic::{
         codegen::InterceptedService,
         metadata::{Ascii, MetadataValue},
         service::Interceptor,
         transport::{Certificate, Channel, ClientTlsConfig},
-        Response, Status,
+        Request, Response, Status,
     };
 
     #[derive(Resource, Clone)]
-    pub struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, AuthInterceptor>>);
+    pub struct BevyFirestoreClient(
+        FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>,
+    );
 
     #[derive(Resource)]
     struct BevyFirebaseCreateClientRunning(bool);
@@ -43,18 +49,23 @@ pub mod firestore {
     struct EmulatorUrl(String);
 
     #[derive(Clone)]
-    struct AuthInterceptor {
-        header_value: MetadataValue<Ascii>,
+    struct FirebaseInterceptor {
+        bearer_token: MetadataValue<Ascii>,
+        db: MetadataValue<Ascii>,
     }
 
-    impl Interceptor for AuthInterceptor {
+    impl Interceptor for FirebaseInterceptor {
         fn call(
             &mut self,
             mut request: tonic::Request<()>,
         ) -> Result<tonic::Request<()>, tonic::Status> {
             request
                 .metadata_mut()
-                .insert("authorization", self.header_value.clone());
+                .insert("authorization", self.bearer_token.clone());
+
+            request
+                .metadata_mut()
+                .insert("google-cloud-resource-prefix", self.db.clone());
             Ok(request)
         }
     }
@@ -71,7 +82,8 @@ pub mod firestore {
             app.add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
                 .add_startup_system(init)
                 .add_system(create_client)
-                .add_system(poll_client_added);
+                .add_system(poll_client_added)
+                .add_event::<MyTestEvent>();
 
             if self.emulator_url.is_some() {
                 app.insert_resource(EmulatorUrl(self.emulator_url.clone().unwrap()));
@@ -91,12 +103,14 @@ pub mod firestore {
         uid: Option<Res<UserId>>,
         running: Res<BevyFirebaseCreateClientRunning>,
         emulator: Option<Res<EmulatorUrl>>,
+        project_id: Res<ProjectId>,
     ) {
         if running.0 || client.is_some() || id_token.is_none() || uid.is_none() {
             return;
         }
 
         let id_token = id_token.unwrap().0.clone();
+        let project_id = project_id.0.clone();
 
         commands.insert_resource(BevyFirebaseCreateClientRunning(true));
 
@@ -107,9 +121,6 @@ pub mod firestore {
 
         // CREATE BG TASK TO INSERT CLIENT AS RESOURCE
         runtime.spawn_background_task(|mut ctx| async move {
-            let bearer_token = format!("Bearer {}", id_token);
-            let header_value: MetadataValue<_> = bearer_token.parse().unwrap();
-
             let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
             let certs = read_to_string(data_dir.join("gcp/gtsr1.pem")).unwrap();
 
@@ -132,8 +143,15 @@ pub mod firestore {
                     .unwrap()
             };
 
-            let service =
-                FirestoreClient::with_interceptor(channel, AuthInterceptor { header_value });
+            let service = FirestoreClient::with_interceptor(
+                channel,
+                FirebaseInterceptor {
+                    bearer_token: format!("Bearer {}", id_token).parse().unwrap(),
+                    db: format!("projects/{}/databases/(default)", project_id.clone())
+                        .parse()
+                        .unwrap(),
+                },
+            );
 
             ctx.run_on_main_thread(move |ctx| {
                 ctx.world.insert_resource(BevyFirestoreClient(service));
@@ -142,6 +160,55 @@ pub mod firestore {
         });
     }
 
+    pub struct MyTestEventInner {
+        pub msg: ListenResponse,
+    }
+    pub struct MyTestEvent(pub MyTestEventInner);
+
+    pub fn add_listener(
+        runtime: &ResMut<TokioTasksRuntime>,
+        client: &mut BevyFirestoreClient,
+        project_id: String,
+        target: String,
+    ) {
+        let mut client = client.0.clone();
+
+        // TODO start own thread
+        runtime.spawn_background_task(|mut ctx| async move {
+            let db = format!("projects/{project_id}/databases/(default)");
+            let req = ListenRequest {
+                database: db.clone(),
+                labels: HashMap::new(),
+                target_change: Some(TargetChange::AddTarget(Target {
+                    target_id: 0x52757374,
+                    once: false,
+                    resume_type: None,
+                    target_type: Some(TargetType::Documents(DocumentsTarget {
+                        documents: vec![db + "/documents/" + &*target],
+                    })),
+                    ..Default::default()
+                })),
+            };
+
+            let req = Request::new(stream::iter(vec![req]).chain(stream::pending()));
+
+            // TODO handle errors
+            let res = client.listen(req).await.unwrap();
+
+            let mut res = res.into_inner();
+
+            while let Some(msg) = res.next().await {
+                ctx.run_on_main_thread(move |ctx| {
+                    ctx.world
+                        .send_event(MyTestEvent(MyTestEventInner { msg: msg.unwrap() }));
+                    // TODO test if awaiting here drops events
+                })
+                .await;
+            }
+        });
+    }
+
+    // TODO events
     fn poll_client_added(client: Option<ResMut<BevyFirestoreClient>>) {
         if let Some(client) = client {
             if !client.is_added() {
@@ -159,6 +226,7 @@ pub mod firestore {
         collection_id: &String,
         document_data: HashMap<String, Value>,
     ) -> Result<tonic::Response<Document>, tonic::Status> {
+        // TODO fails silently
         client
             .0
             .create_document(CreateDocumentRequest {
