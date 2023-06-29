@@ -6,7 +6,7 @@ use bevy_firebase::{
     deps::{Status, Value, ValueType},
     firestore::{
         add_listener, create_document, delete_document, read_document, update_document,
-        BevyFirestoreClient, MyTestEvent,
+        BevyFirestoreClient, ListenerEvent,
     },
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
@@ -33,14 +33,15 @@ fn main() {
             // emulator_url: None
             emulator_url: Some("http://127.0.0.1:8080".into())
         })
+        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
         .add_system(test_firestore_operations)
         .add_system(test_listener_system)
         .run();
 }
 
-fn test_listener_system(mut er: EventReader<MyTestEvent>) {
+fn test_listener_system(mut er: EventReader<ListenerEvent>) {
     for ev in er.iter() {
-        println!("EVENT! {:?}", ev.0.msg);
+        println!("EVENT! {:?}", ev.0);
     }
 }
 
@@ -74,20 +75,20 @@ fn test_firestore_operations(
             &mut client,
             project_id.clone(),
             document_path.clone(),
+            "test".into(),
         );
 
         runtime.spawn_background_task(|mut ctx| async move {
             let document_path = &format!("lobbies/{}", uid);
 
-            create_document(
+            let _ = create_document(
                 &mut client,
                 &project_id,
                 &uid,
                 &"lobbies".into(),
                 data.clone(),
             )
-            .await?;
-            // TODO fails silently
+            .await;
 
             let read = read_document(&mut client, &project_id, document_path).await;
             println!("READ 1: {:?}\n", read);
@@ -101,12 +102,12 @@ fn test_firestore_operations(
 
             ctx.sleep_updates(30).await;
 
-            update_document(&mut client, &project_id, document_path, data.clone()).await?;
+            let _ = update_document(&mut client, &project_id, document_path, data.clone()).await;
 
             let read = read_document(&mut client, &project_id, document_path).await;
             println!("READ 2: {:?}\n", read);
 
-            delete_document(&mut client, &project_id, document_path).await?;
+            let _ = delete_document(&mut client, &project_id, document_path).await;
 
             let read = read_document(&mut client, &project_id, document_path).await;
             println!("READ 3: {:?}\n", read);

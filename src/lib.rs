@@ -78,12 +78,10 @@ pub mod firestore {
         fn build(&self, app: &mut App) {
             // TODO refresh client token when app token is refreshed
 
-            // TODO don't add tokio plugin here, poll for it and run init after runtime is added
-            app.add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
-                .add_startup_system(init)
+            app.add_startup_system(init)
                 .add_system(create_client)
                 .add_system(poll_client_added)
-                .add_event::<MyTestEvent>();
+                .add_event::<ListenerEvent>();
 
             if self.emulator_url.is_some() {
                 app.insert_resource(EmulatorUrl(self.emulator_url.clone().unwrap()));
@@ -160,20 +158,21 @@ pub mod firestore {
         });
     }
 
-    pub struct MyTestEventInner {
-        pub msg: ListenResponse,
+    #[derive(Debug)]
+    pub struct ListenerEventInner {
+        pub res: ListenResponse,
+        pub id: String, // HACK: used to differentiate between listeners, i don't understand how to take a custom event
     }
-    pub struct MyTestEvent(pub MyTestEventInner);
+    pub struct ListenerEvent(pub ListenerEventInner);
 
     pub fn add_listener(
         runtime: &ResMut<TokioTasksRuntime>,
         client: &mut BevyFirestoreClient,
         project_id: String,
         target: String,
+        listener_id: String,
     ) {
         let mut client = client.0.clone();
-
-        // TODO start own thread
         runtime.spawn_background_task(|mut ctx| async move {
             let db = format!("projects/{project_id}/databases/(default)");
             let req = ListenRequest {
@@ -198,9 +197,14 @@ pub mod firestore {
             let mut res = res.into_inner();
 
             while let Some(msg) = res.next().await {
+                let listener_id = listener_id.clone();
+
                 ctx.run_on_main_thread(move |ctx| {
-                    ctx.world
-                        .send_event(MyTestEvent(MyTestEventInner { msg: msg.unwrap() }));
+                    // TODO allow user defined events
+                    ctx.world.send_event(ListenerEvent(ListenerEventInner {
+                        res: msg.unwrap(),
+                        id: listener_id,
+                    }));
                     // TODO test if awaiting here drops events
                 })
                 .await;
@@ -208,7 +212,6 @@ pub mod firestore {
         });
     }
 
-    // TODO events
     fn poll_client_added(client: Option<ResMut<BevyFirestoreClient>>) {
         if let Some(client) = client {
             if !client.is_added() {
@@ -225,8 +228,7 @@ pub mod firestore {
         document_id: &String,
         collection_id: &String,
         document_data: HashMap<String, Value>,
-    ) -> Result<tonic::Response<Document>, tonic::Status> {
-        // TODO fails silently
+    ) -> Result<Response<Document>, Status> {
         client
             .0
             .create_document(CreateDocumentRequest {
@@ -247,7 +249,7 @@ pub mod firestore {
         project_id: &String,
         document_path: &String,
         document_data: HashMap<String, Value>,
-    ) -> Result<tonic::Response<Document>, tonic::Status> {
+    ) -> Result<Response<Document>, Status> {
         client
             .0
             .update_document(UpdateDocumentRequest {
@@ -267,7 +269,7 @@ pub mod firestore {
         client: &mut BevyFirestoreClient,
         project_id: &String,
         document_path: &String,
-    ) -> Result<tonic::Response<Document>, tonic::Status> {
+    ) -> Result<Response<Document>, Status> {
         client
             .0
             .get_document(GetDocumentRequest {
