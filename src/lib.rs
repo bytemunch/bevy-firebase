@@ -70,6 +70,7 @@ pub mod firestore {
         }
     }
 
+    #[derive(Default)]
     pub struct FirestorePlugin {
         pub emulator_url: Option<String>,
     }
@@ -120,7 +121,7 @@ pub mod firestore {
         // CREATE BG TASK TO INSERT CLIENT AS RESOURCE
         runtime.spawn_background_task(|mut ctx| async move {
             let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-            let certs = read_to_string(data_dir.join("gcp/gtsr1.pem")).unwrap();
+            let certs = read_to_string(data_dir.join("bevy-firebase/gcp/gtsr1.pem")).unwrap();
 
             let channel = if emulator_url.is_none() {
                 let tls_config = ClientTlsConfig::new()
@@ -397,8 +398,10 @@ pub mod firestore {
 
 pub mod auth {
     use std::{
+        fs::read_to_string,
         io::{self, BufRead, BufReader, Write},
         net::TcpListener,
+        path::PathBuf,
         thread::sleep,
         time::Duration,
     };
@@ -411,13 +414,6 @@ pub mod auth {
     use futures_lite::future;
     use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseCommandsExtension, PromiseLikeBase};
     use url::Url;
-    pub struct AuthPlugin {
-        pub firebase_api_key: String,
-        pub google_client_id: String,
-        pub google_client_secret: String,
-        pub firebase_refresh_token: Option<String>,
-        pub firebase_project_id: String,
-    }
 
     // TODO super-struct this stuff, make pub only needed fields
 
@@ -457,6 +453,14 @@ pub mod auth {
     #[derive(Component)]
     struct RedirectTask(Task<String>);
 
+    pub struct AuthPlugin {
+        pub google_client_id: String,
+        pub google_client_secret: String,
+        pub firebase_api_key: String,
+        pub firebase_project_id: String,
+        pub firebase_refresh_token: Option<String>,
+    }
+
     impl Plugin for AuthPlugin {
         fn build(&self, app: &mut App) {
             // allow user to read keys from file
@@ -467,6 +471,8 @@ pub mod auth {
                 .insert_resource(GoogleClientSecret(self.google_client_secret.clone()))
                 .insert_resource(ApiKey(self.firebase_api_key.clone()))
                 .insert_resource(ProjectId(self.firebase_project_id.clone()));
+
+            // TODO this should all be called when developer chooses, NOT on startup!!!!!11!1
 
             if self.firebase_refresh_token.is_some() {
                 app.insert_resource(RefreshToken(self.firebase_refresh_token.clone()))
@@ -479,6 +485,34 @@ pub mod auth {
                     .add_system(poll_id_token);
 
                 // TODO state for logged in/ logged out/ doing login
+            }
+        }
+    }
+
+    impl Default for AuthPlugin {
+        fn default() -> Self {
+            let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
+            let firebase_api_key =
+                read_to_string(data_dir.join("bevy-firebase/keys/firebase-api.key")).unwrap();
+            let google_client_id =
+                read_to_string(data_dir.join("bevy-firebase/keys/google-client-id.key")).unwrap();
+            let google_client_secret =
+                read_to_string(data_dir.join("bevy-firebase/keys/google-client-secret.key"))
+                    .unwrap();
+            let firebase_refresh_token =
+                read_to_string(data_dir.join("bevy-firebase/keys/firebase-refresh.key"));
+
+            let firebase_refresh_token = match firebase_refresh_token {
+                Ok(key) => Some(key),
+                Err(_) => None,
+            };
+
+            AuthPlugin {
+                firebase_api_key,
+                google_client_id,
+                google_client_secret,
+                firebase_refresh_token,
+                firebase_project_id: "".into(),
             }
         }
     }

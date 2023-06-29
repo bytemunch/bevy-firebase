@@ -14,24 +14,12 @@ use bevy_tokio_tasks::TokioTasksRuntime;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        // .add_plugin(LogDiagnosticsPlugin::default())
-        // .add_plugin(FrameTimeDiagnosticsPlugin::default())
-        // TODO add plugin dependencies here
-        // .add_plugin(TokioTasksPlugin::default())
-        // .add_plugin(pecs plugin)
         .add_plugin(bevy_firebase::auth::AuthPlugin {
-            firebase_api_key: "FIREBASE_API_KEY".into(),
-            google_client_id:
-                "CLIENT_ID_STRING.apps.googleusercontent.com".into(),
-            google_client_secret: "GOOGLE_CLIENT_SECRET".into(),
-            // firebase_refresh_token: None,
-            // TODO refresh token stored to file
-            firebase_refresh_token: Some("REFRESH_TOKEN".into()),
             firebase_project_id: "test-auth-rs".into(),
+            ..Default::default()
         })
         .add_plugin(bevy_firebase::firestore::FirestorePlugin {
-            // emulator_url: None
-            emulator_url: Some("http://127.0.0.1:8080".into())
+            emulator_url: Some("http://127.0.0.1:8080".into()),
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
         .add_system(test_firestore_operations)
