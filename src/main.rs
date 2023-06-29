@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_firebase::{
-    auth::{ProjectId, UserId},
+    auth::{AuthState, GotAuthUrl, ProjectId, UserId},
     deps::{Status, Value, ValueType},
     firestore::{
         add_listener, create_document, delete_document, read_document, update_document,
@@ -22,9 +22,31 @@ fn main() {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_startup_system(begin_login_flow)
         .add_system(test_firestore_operations)
         .add_system(test_listener_system)
+        .add_system(auth_url_listener)
         .run();
+}
+
+fn begin_login_flow(world: &mut World) {
+    // Exclusive system so we can call apply_state_transition
+    // Won't need to be exclusive if not run frame 0
+
+    apply_state_transition::<AuthState>(world);
+
+    let state = world.get_resource::<State<AuthState>>().unwrap();
+    if state.0 != AuthState::Start {
+        return;
+    }
+
+    world.insert_resource(NextState(Some(AuthState::Init)));
+}
+
+fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
+    for e in er.iter() {
+        println!("Go to this URL to sign in:\n{}\n", e.0);
+    }
 }
 
 fn test_listener_system(mut er: EventReader<ListenerEvent>) {

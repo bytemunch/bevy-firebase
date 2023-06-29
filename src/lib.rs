@@ -15,7 +15,7 @@ pub mod firestore {
     use std::{collections::HashMap, fs::read_to_string, path::PathBuf};
 
     use crate::{
-        auth::{IdToken, ProjectId, UserId},
+        auth::{AuthState, IdToken, ProjectId},
         googleapis::google::firestore::v1::{
             firestore_client::FirestoreClient,
             listen_request::TargetChange,
@@ -70,6 +70,15 @@ pub mod firestore {
         }
     }
 
+    #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+    pub enum FirestoreState {
+        #[default]
+        Start,
+        Init,
+        CreateClient,
+        Ready,
+    }
+
     #[derive(Default)]
     pub struct FirestorePlugin {
         pub emulator_url: Option<String>,
@@ -78,36 +87,36 @@ pub mod firestore {
     impl Plugin for FirestorePlugin {
         fn build(&self, app: &mut App) {
             // TODO refresh client token when app token is refreshed
-
-            app.add_startup_system(init)
-                .add_system(create_client)
-                .add_system(poll_client_added)
-                .add_event::<ListenerEvent>();
-
             if self.emulator_url.is_some() {
                 app.insert_resource(EmulatorUrl(self.emulator_url.clone().unwrap()));
             }
+
+            app.add_state::<FirestoreState>()
+                .add_event::<ListenerEvent>()
+                .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
+                .add_system(init.in_schedule(OnEnter(FirestoreState::Init)))
+                .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)))
+                .add_system(client_added.in_schedule(OnEnter(FirestoreState::Ready)));
         }
     }
 
-    fn init(mut commands: Commands) {
+    fn logged_in(mut next_state: ResMut<NextState<FirestoreState>>) {
+        next_state.set(FirestoreState::Init);
+    }
+
+    fn init(mut commands: Commands, mut next_state: ResMut<NextState<FirestoreState>>) {
         commands.insert_resource(BevyFirebaseCreateClientRunning(false));
+
+        next_state.set(FirestoreState::CreateClient);
     }
 
     fn create_client(
         mut commands: Commands,
         runtime: ResMut<TokioTasksRuntime>,
-        client: Option<Res<BevyFirestoreClient>>,
         id_token: Option<Res<IdToken>>,
-        uid: Option<Res<UserId>>,
-        running: Res<BevyFirebaseCreateClientRunning>,
         emulator: Option<Res<EmulatorUrl>>,
         project_id: Res<ProjectId>,
     ) {
-        if running.0 || client.is_some() || id_token.is_none() || uid.is_none() {
-            return;
-        }
-
         let id_token = id_token.unwrap().0.clone();
         let project_id = project_id.0.clone();
 
@@ -154,9 +163,16 @@ pub mod firestore {
 
             ctx.run_on_main_thread(move |ctx| {
                 ctx.world.insert_resource(BevyFirestoreClient(service));
+
+                ctx.world
+                    .insert_resource(NextState(Some(FirestoreState::Ready)));
             })
             .await;
         });
+    }
+
+    fn client_added(client: Res<BevyFirestoreClient>) {
+        println!("Client added! {:?}\n", client.0)
     }
 
     #[derive(Debug)]
@@ -211,16 +227,6 @@ pub mod firestore {
                 .await;
             }
         });
-    }
-
-    fn poll_client_added(client: Option<ResMut<BevyFirestoreClient>>) {
-        if let Some(client) = client {
-            if !client.is_added() {
-                return;
-            }
-
-            println!("Client added! {:?}\n", client.0)
-        }
     }
 
     pub async fn create_document(
@@ -453,40 +459,24 @@ pub mod auth {
     #[derive(Component)]
     struct RedirectTask(Task<String>);
 
+    pub struct GotAuthUrl(pub Url);
+
+    #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+    pub enum AuthState {
+        #[default]
+        Start,
+        Refreshing,
+        Init,
+        WaitForLogin,
+        LoggedIn,
+    }
+
     pub struct AuthPlugin {
         pub google_client_id: String,
         pub google_client_secret: String,
         pub firebase_api_key: String,
         pub firebase_project_id: String,
         pub firebase_refresh_token: Option<String>,
-    }
-
-    impl Plugin for AuthPlugin {
-        fn build(&self, app: &mut App) {
-            // allow user to read keys from file
-            // TODO optionally save refresh token to file
-
-            app.add_plugin(PecsPlugin)
-                .insert_resource(GoogleClientId(self.google_client_id.clone()))
-                .insert_resource(GoogleClientSecret(self.google_client_secret.clone()))
-                .insert_resource(ApiKey(self.firebase_api_key.clone()))
-                .insert_resource(ProjectId(self.firebase_project_id.clone()));
-
-            // TODO this should all be called when developer chooses, NOT on startup!!!!!11!1
-
-            if self.firebase_refresh_token.is_some() {
-                app.insert_resource(RefreshToken(self.firebase_refresh_token.clone()))
-                    .add_startup_system(refresh_login);
-            } else {
-                // add startup system to prompt for login
-                app.add_startup_system(init_login)
-                    .add_system(poll_authorize_url)
-                    .add_system(poll_redirect_task)
-                    .add_system(poll_id_token);
-
-                // TODO state for logged in/ logged out/ doing login
-            }
-        }
     }
 
     impl Default for AuthPlugin {
@@ -517,7 +507,34 @@ pub mod auth {
         }
     }
 
-    fn init_login(mut commands: Commands, google_client_id: Res<GoogleClientId>) {
+    impl Plugin for AuthPlugin {
+        fn build(&self, app: &mut App) {
+            // TODO optionally save refresh token to file
+
+            app.add_plugin(PecsPlugin)
+                .insert_resource(GoogleClientId(self.google_client_id.clone()))
+                .insert_resource(GoogleClientSecret(self.google_client_secret.clone()))
+                .insert_resource(ApiKey(self.firebase_api_key.clone()))
+                .insert_resource(ProjectId(self.firebase_project_id.clone()))
+                .add_state::<AuthState>()
+                .add_event::<GotAuthUrl>()
+                .add_system(init_login.in_schedule(OnEnter(AuthState::Init)))
+                .add_system(poll_redirect_task.in_set(OnUpdate(AuthState::WaitForLogin)))
+                .add_system(refresh_login.in_schedule(OnEnter(AuthState::Refreshing)));
+
+            if self.firebase_refresh_token.is_some() {
+                app.insert_resource(RefreshToken(self.firebase_refresh_token.clone()))
+                    .insert_resource(NextState(Some(AuthState::Refreshing)));
+            };
+        }
+    }
+
+    fn init_login(
+        mut commands: Commands,
+        google_client_id: Res<GoogleClientId>,
+        mut ew: EventWriter<GotAuthUrl>,
+        mut next_state: ResMut<NextState<AuthState>>,
+    ) {
         // sets up redirect server
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -526,7 +543,7 @@ pub mod auth {
 
         let authorize_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, google_client_id.0)).unwrap();
 
-        commands.insert_resource(AuthorizeUrl(authorize_url));
+        ew.send(GotAuthUrl(authorize_url));
 
         // TODO use bevy-tokio-tasks here
 
@@ -585,6 +602,8 @@ pub mod auth {
         });
 
         commands.spawn_empty().insert(RedirectTask(task));
+
+        next_state.set(AuthState::WaitForLogin);
     }
 
     fn poll_redirect_task(mut commands: Commands, mut q_task: Query<(Entity, &mut RedirectTask)>) {
@@ -632,7 +651,12 @@ pub mod auth {
                     .send()
                 }
             ))
-            .then(asyn!(_, result, mut commands:Commands => {
+            .then(asyn!(
+                _,
+                result,
+                mut commands:Commands,
+                mut next_state: ResMut<NextState<AuthState>>,
+                 => {
                 // TODO dry
                 let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
 
@@ -642,17 +666,8 @@ pub mod auth {
                 commands.insert_resource(IdToken(id_token.into()));
                 commands.insert_resource(UserId(uid.into()));
                 // TODO cleanup other resources
+                next_state.set(AuthState::LoggedIn);
             }));
-        }
-    }
-
-    fn poll_authorize_url(url: Option<Res<AuthorizeUrl>>) {
-        if let Some(url) = url {
-            if url.is_added() {
-                println!("Go to this URL to sign in:\n{}\n", url.0);
-                // TODO user facing button with link in app
-                // TODO dev facing API to expose auth URL
-            }
         }
     }
 
@@ -670,7 +685,12 @@ pub mod auth {
                 .body(format!("grant_type=refresh_token&refresh_token={}",state.0))
                 .send()
             }))
-            .then(asyn!(_state, result, mut commands:Commands=>{
+            .then(asyn!(
+                _state,
+                result,
+                mut commands:Commands,
+                mut next_state: ResMut<NextState<AuthState>>,
+                 => {
                 // TODO dry
                 // TODO dry     lol
                 let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
@@ -680,18 +700,13 @@ pub mod auth {
 
                 commands.insert_resource(IdToken(id_token.into()));
                 commands.insert_resource(UserId(uid.into()));
+
+                next_state.set(AuthState::LoggedIn);
+
                 // TODO cleanup other resources
             }))
         );
 
         // TODO if error, clear all token resources (logout)
-    }
-
-    fn poll_id_token(id_token: Option<Res<IdToken>>) {
-        if let Some(token) = id_token {
-            if token.is_added() {
-                println!("ID TOKEN: {}\n", token.0);
-            }
-        }
     }
 }
