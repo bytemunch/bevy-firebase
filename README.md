@@ -1,10 +1,11 @@
-# bevy_firebase
+# bevy-firebase
 
-gRPC firebase integration to the Bevy game engine.
+gRPC firebase integration for the Bevy game engine.
 
 ## Installing
 
-`cargo add bevy_firebase`
+TODO: `cargo add bevy_firebase`
+I'll get this on crates.io once I've learned CI/CD
 
 ## Version Compatibility
 
@@ -12,7 +13,7 @@ Targets Bevy 10.1
 
 ## Usage
 
-not implemented
+TODO usage guide
 
 You're gonna need your client ID, client secret, firebase API key and firebase project ID.
 
