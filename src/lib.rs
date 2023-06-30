@@ -50,11 +50,24 @@ use tonic::{
 #[derive(Resource, Clone)]
 pub struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>);
 
-#[derive(Resource)]
-struct BevyFirebaseCreateClientRunning(bool);
-
 #[derive(Resource, Clone)]
 struct EmulatorUrl(String);
+
+#[derive(Debug)]
+pub struct ListenerEventInner {
+    pub res: ListenResponse,
+    pub id: String, // HACK: used to differentiate between listeners, i don't understand how to take a custom event
+}
+pub struct ListenerEvent(pub ListenerEventInner);
+
+#[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+pub enum FirestoreState {
+    #[default]
+    Start,
+    Init,
+    CreateClient,
+    Ready,
+}
 
 #[derive(Clone)]
 struct FirebaseInterceptor {
@@ -76,15 +89,6 @@ impl Interceptor for FirebaseInterceptor {
             .insert("google-cloud-resource-prefix", self.db.clone());
         Ok(request)
     }
-}
-
-#[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum FirestoreState {
-    #[default]
-    Start,
-    Init,
-    CreateClient,
-    Ready,
 }
 
 #[derive(Default)]
@@ -112,23 +116,18 @@ fn logged_in(mut next_state: ResMut<NextState<FirestoreState>>) {
     next_state.set(FirestoreState::Init);
 }
 
-fn init(mut commands: Commands, mut next_state: ResMut<NextState<FirestoreState>>) {
-    commands.insert_resource(BevyFirebaseCreateClientRunning(false));
-
+fn init(mut next_state: ResMut<NextState<FirestoreState>>) {
     next_state.set(FirestoreState::CreateClient);
 }
 
 fn create_client(
-    mut commands: Commands,
     runtime: ResMut<TokioTasksRuntime>,
-    id_token: Option<Res<IdToken>>,
+    id_token: Res<IdToken>,
     emulator: Option<Res<EmulatorUrl>>,
     project_id: Res<ProjectId>,
 ) {
-    let id_token = id_token.unwrap().0.clone();
+    let id_token = id_token.0.clone();
     let project_id = project_id.0.clone();
-
-    commands.insert_resource(BevyFirebaseCreateClientRunning(true));
 
     let emulator_url = match emulator {
         Some(e) => Some(e.0.clone()),
@@ -182,13 +181,6 @@ fn create_client(
 fn client_added(client: Res<BevyFirestoreClient>) {
     println!("Client added! {:?}\n", client.0)
 }
-
-#[derive(Debug)]
-pub struct ListenerEventInner {
-    pub res: ListenResponse,
-    pub id: String, // HACK: used to differentiate between listeners, i don't understand how to take a custom event
-}
-pub struct ListenerEvent(pub ListenerEventInner);
 
 pub fn add_listener(
     runtime: &ResMut<TokioTasksRuntime>,
@@ -308,137 +300,49 @@ pub async fn delete_document(
         .await
 }
 
-pub fn create_document_sync(
-    mut client: BevyFirestoreClient,
-    runtime: &ResMut<TokioTasksRuntime>,
-    project_id: String,
-    document_id: String,
-    collection_id: String,
-    document_data: HashMap<String, Value>,
-) {
-    runtime.spawn_background_task(|_ctx| async move {
-        let res = client
-            .0
-            .create_document(CreateDocumentRequest {
-                parent: format!("projects/{project_id}/databases/(default)/documents"),
-                collection_id,
-                document_id,
-                document: Some(Document {
-                    fields: document_data,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .await;
-
-        // TODO sync fns return results to bevy somehow
-        // run_on_main_thread(|ctx| {ctx.world.insertResource::<BevyFirebaseResult(res)>()?})
-        println!("\n\ndata created: {:?}\n", res);
-    });
-}
-
-pub fn delete_document_sync(
-    mut client: BevyFirestoreClient,
-    runtime: &ResMut<TokioTasksRuntime>,
-    project_id: String,
-    document_path: String,
-) {
-    runtime.spawn_background_task(|_ctx| async move {
-        let res = client
-            .0
-            .delete_document(DeleteDocumentRequest {
-                name: format!(
-                    "projects/{project_id}/databases/(default)/documents/{document_path}"
-                ),
-                ..Default::default()
-            })
-            .await;
-
-        println!("data deleted: {:?}\n", res);
-    });
-}
-
-pub fn update_document_sync(
-    mut client: BevyFirestoreClient,
-    runtime: &ResMut<TokioTasksRuntime>,
-    project_id: String,
-    document_path: String,
-    document_data: HashMap<String, Value>,
-) {
-    runtime.spawn_background_task(|_ctx| async move {
-        let res = client
-            .0
-            .update_document(UpdateDocumentRequest {
-                document: Some(Document {
-                    name: format!(
-                        "projects/{project_id}/databases/(default)/documents/{document_path}"
-                    ),
-                    fields: document_data,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .await;
-
-        println!("data updated: {:?}\n", res);
-    });
-}
-
-pub fn read_document_sync(
-    mut client: BevyFirestoreClient,
-    runtime: &ResMut<TokioTasksRuntime>,
-    project_id: String,
-    document_path: String,
-) {
-    runtime.spawn_background_task(|_ctx| async move {
-        let res = client
-            .0
-            .get_document(GetDocumentRequest {
-                name: format!(
-                    "projects/{project_id}/databases/(default)/documents/{document_path}"
-                ),
-                ..Default::default()
-            })
-            .await;
-
-        println!("data read: {:?}\n", res);
-    });
-}
-
 // AUTH
 
-// TODO super-struct this stuff, make pub only needed fields
-
+// From plugin
 #[derive(Resource)]
 struct GoogleClientId(String);
 
+// From plugin
 #[derive(Resource)]
 struct GoogleClientSecret(String);
 
+// From plugin
 #[derive(Resource)]
 struct ApiKey(String);
 
-#[derive(Resource)]
-pub struct RefreshToken(Option<String>);
-
-#[derive(Resource)]
-pub struct IdToken(pub String);
-
-#[derive(Resource)]
-pub struct UserId(pub String);
-
+// From plugin
 #[derive(Resource)]
 pub struct ProjectId(pub String);
 
+// Retrieved / From plugin
 #[derive(Resource)]
-struct RedirectPort(u16);
+pub struct RefreshToken(Option<String>);
 
+// Retrieved
+#[derive(Resource)]
+pub struct IdToken(pub String);
+
+// Retrieved
+#[derive(Resource)]
+pub struct UserId(pub String);
+
+// Retrieved
 #[derive(Resource)]
 struct GoogleToken(String);
 
+// Retrieved
 #[derive(Resource)]
 struct GoogleAuthCode(String);
 
+// Generated
+#[derive(Resource)]
+struct RedirectPort(u16);
+
+// Event
 pub struct GotAuthUrl(pub Url);
 
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]

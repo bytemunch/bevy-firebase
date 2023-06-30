@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_firebase::{
     deps::{Status, Value, ValueType},
-    log_in, log_out,
+    log_in, log_out, AuthState,
     {
         add_listener, create_document, delete_document, read_document, update_document,
         BevyFirestoreClient, ListenerEvent,
@@ -32,7 +32,7 @@ fn main() {
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
         .add_system(input)
-        .add_system(test_firestore_operations)
+        .add_system(test_firestore_operations.in_schedule(OnEnter(AuthState::LoggedIn)))
         .add_system(test_listener_system)
         .add_system(auth_url_listener)
         .add_state::<AppAuthState>()
@@ -64,73 +64,68 @@ fn test_listener_system(mut er: EventReader<ListenerEvent>) {
 }
 
 fn test_firestore_operations(
-    client: Option<ResMut<BevyFirestoreClient>>,
+    client: ResMut<BevyFirestoreClient>,
     runtime: ResMut<TokioTasksRuntime>,
-    project_id: Option<Res<ProjectId>>,
-    uid: Option<Res<UserId>>,
+    project_id: Res<ProjectId>,
+    uid: Res<UserId>,
 ) {
-    if let (Some(client), Some(project_id), Some(uid)) = (client, project_id, uid) {
-        if !client.is_added() {
-            return;
-        }
+    let uid = uid.0.clone();
+    let project_id = project_id.0.clone();
+    let mut client = client.clone();
 
-        let mut data = HashMap::new();
+    let mut data = HashMap::new();
+
+    data.insert(
+        "test_field".to_string(),
+        Value {
+            value_type: Some(ValueType::IntegerValue(69)),
+        },
+    );
+
+    let document_path = &format!("lobbies/{}", uid);
+
+    add_listener(
+        &runtime,
+        &mut client,
+        project_id.clone(),
+        document_path.clone(),
+        "test".into(),
+    );
+
+    runtime.spawn_background_task(|mut ctx| async move {
+        let document_path = &format!("lobbies/{}", uid);
+
+        let _ = create_document(
+            &mut client,
+            &project_id,
+            &uid,
+            &"lobbies".into(),
+            data.clone(),
+        )
+        .await;
+
+        let read = read_document(&mut client, &project_id, document_path).await;
+        println!("READ 1: {:?}\n", read);
 
         data.insert(
-            "test_field".to_string(),
+            "test_field".into(),
             Value {
-                value_type: Some(ValueType::IntegerValue(69)),
+                value_type: Some(ValueType::IntegerValue(420)),
             },
         );
 
-        let mut client = client.clone();
-        let project_id = project_id.0.clone();
-        let uid = uid.0.clone();
-        let document_path = &format!("lobbies/{}", uid);
+        ctx.sleep_updates(30).await;
 
-        add_listener(
-            &runtime,
-            &mut client,
-            project_id.clone(),
-            document_path.clone(),
-            "test".into(),
-        );
+        let _ = update_document(&mut client, &project_id, document_path, data.clone()).await;
 
-        runtime.spawn_background_task(|mut ctx| async move {
-            let document_path = &format!("lobbies/{}", uid);
+        let read = read_document(&mut client, &project_id, document_path).await;
+        println!("READ 2: {:?}\n", read);
 
-            let _ = create_document(
-                &mut client,
-                &project_id,
-                &uid,
-                &"lobbies".into(),
-                data.clone(),
-            )
-            .await;
+        let _ = delete_document(&mut client, &project_id, document_path).await;
 
-            let read = read_document(&mut client, &project_id, document_path).await;
-            println!("READ 1: {:?}\n", read);
+        let read = read_document(&mut client, &project_id, document_path).await;
+        println!("READ 3: {:?}\n", read);
 
-            data.insert(
-                "test_field".into(),
-                Value {
-                    value_type: Some(ValueType::IntegerValue(420)),
-                },
-            );
-
-            ctx.sleep_updates(30).await;
-
-            let _ = update_document(&mut client, &project_id, document_path, data.clone()).await;
-
-            let read = read_document(&mut client, &project_id, document_path).await;
-            println!("READ 2: {:?}\n", read);
-
-            let _ = delete_document(&mut client, &project_id, document_path).await;
-
-            let read = read_document(&mut client, &project_id, document_path).await;
-            println!("READ 3: {:?}\n", read);
-
-            Ok::<(), Status>(())
-        });
-    }
+        Ok::<(), Status>(())
+    });
 }
