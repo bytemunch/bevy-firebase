@@ -20,9 +20,8 @@ use std::{
     time::Duration,
 };
 
+use serde::Deserialize;
 use url::Url;
-
-use pecs::prelude::{asyn, PecsPlugin, Promise, PromiseCommandsExtension, PromiseLikeBase};
 
 use crate::googleapis::google::firestore::v1::{
     firestore_client::FirestoreClient,
@@ -34,11 +33,9 @@ use crate::googleapis::google::firestore::v1::{
 
 use bevy::prelude::*;
 
-use bevy::tasks::{AsyncComputeTaskPool, Task};
-
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-use futures_lite::{future, stream, StreamExt};
+use futures_lite::{stream, StreamExt};
 
 use tonic::{
     codegen::InterceptedService,
@@ -442,9 +439,6 @@ struct GoogleToken(String);
 #[derive(Resource)]
 struct GoogleAuthCode(String);
 
-#[derive(Component)]
-struct RedirectTask(Task<String>);
-
 pub struct GotAuthUrl(pub Url);
 
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
@@ -454,7 +448,7 @@ pub enum AuthState {
     LogOut,
     Refreshing,
     LogIn,
-    WaitForLogin,
+    GotAuthCode,
     LoggedIn,
 }
 
@@ -497,8 +491,7 @@ impl Plugin for AuthPlugin {
     fn build(&self, app: &mut App) {
         // TODO optionally save refresh token to file
 
-        app.add_plugin(PecsPlugin)
-            .insert_resource(GoogleClientId(self.google_client_id.clone()))
+        app.insert_resource(GoogleClientId(self.google_client_id.clone()))
             .insert_resource(GoogleClientSecret(self.google_client_secret.clone()))
             .insert_resource(ApiKey(self.firebase_api_key.clone()))
             .insert_resource(ProjectId(self.firebase_project_id.clone()))
@@ -506,10 +499,11 @@ impl Plugin for AuthPlugin {
             .add_state::<AuthState>()
             .add_event::<GotAuthUrl>()
             .add_system(init_login.in_schedule(OnEnter(AuthState::LogIn)))
-            .add_system(poll_redirect_task.in_set(OnUpdate(AuthState::WaitForLogin)))
+            .add_system(auth_code_to_firebase_token.in_schedule(OnEnter(AuthState::GotAuthCode)))
             .add_system(refresh_login.in_schedule(OnEnter(AuthState::Refreshing)))
             .add_system(save_refresh_token.in_schedule(OnEnter(AuthState::LoggedIn)))
-            .add_system(cleanup.in_schedule(OnEnter(AuthState::LogOut)));
+            .add_system(login_clear_resources.in_schedule(OnEnter(AuthState::LogOut)))
+            .add_system(logout_clear_resources.in_schedule(OnEnter(AuthState::LogOut)));
     }
 }
 
@@ -539,7 +533,7 @@ pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<Next
     next_state.set(AuthState::LogOut);
 }
 
-fn cleanup(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>) {
+fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>) {
     commands.remove_resource::<IdToken>();
     commands.remove_resource::<UserId>();
 
@@ -553,11 +547,17 @@ fn cleanup(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>)
     println!("Logged out.");
 }
 
+fn login_clear_resources(mut commands: Commands) {
+    commands.remove_resource::<RedirectPort>();
+    commands.remove_resource::<GoogleToken>();
+    commands.remove_resource::<GoogleAuthCode>();
+}
+
 fn init_login(
     mut commands: Commands,
     google_client_id: Res<GoogleClientId>,
     mut ew: EventWriter<GotAuthUrl>,
-    mut next_state: ResMut<NextState<AuthState>>,
+    runtime: ResMut<TokioTasksRuntime>,
 ) {
     // sets up redirect server
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -571,11 +571,7 @@ fn init_login(
 
     // TODO use bevy-tokio-tasks here
 
-    let thread_pool = AsyncComputeTaskPool::get();
-
-    let task = thread_pool.spawn(async move {
-        let mut code: Option<String> = None;
-
+    runtime.spawn_background_task(|mut ctx| async move {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
@@ -586,8 +582,9 @@ fn init_login(
                         reader.read_line(&mut request_line).unwrap();
 
                         let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // idk what this do
-                        let url =
-                            Url::parse(&("http://localhost".to_string() + redirect_url)).unwrap();
+                        let url = Url::parse(&("http://localhost".to_string() + redirect_url));
+
+                        let url = url.unwrap().to_owned();
 
                         let code_pair = url.query_pairs().find(|pair| {
                             let (key, _) = pair;
@@ -595,7 +592,15 @@ fn init_login(
                         });
 
                         if let Some(code_pair) = code_pair {
-                            code = Some(code_pair.1.into_owned());
+                            let code = code_pair.1.into_owned();
+                            ctx.run_on_main_thread(move |ctx| {
+                                println!("IN MAIN THREAD");
+                                ctx.world.insert_resource(GoogleAuthCode(code));
+
+                                ctx.world
+                                    .insert_resource(NextState(Some(AuthState::GotAuthCode)));
+                            })
+                            .await;
                         }
                     }
 
@@ -619,86 +624,100 @@ fn init_login(
                 }
             }
         }
-
-        while code.is_none() {}
-
-        code.unwrap()
     });
-
-    commands.spawn_empty().insert(RedirectTask(task));
-
-    next_state.set(AuthState::WaitForLogin);
 }
 
-fn poll_redirect_task(mut commands: Commands, mut q_task: Query<(Entity, &mut RedirectTask)>) {
-    if q_task.is_empty() {
-        return;
-    }
+fn auth_code_to_firebase_token(
+    auth_code: Res<GoogleAuthCode>,
+    runtime: ResMut<TokioTasksRuntime>,
+    port: Res<RedirectPort>,
+    secret: Res<GoogleClientSecret>,
+    client_id: Res<GoogleClientId>,
+    api_key: Res<ApiKey>,
+) {
+    let auth_code = auth_code.0.clone();
+    let port = format!("{}", port.0);
+    let secret = secret.0.clone();
+    let client_id = client_id.0.clone();
+    let api_key = api_key.0.clone();
 
-    let (e, mut task) = q_task.single_mut();
-    if task.0.is_finished() {
-        commands.entity(e).despawn();
+    runtime.spawn_background_task(|mut ctx| async move {
+        let client = reqwest::Client::new();
+        let form = reqwest::multipart::Form::new()
+            .text("code", auth_code)
+            .text("client_id", client_id)
+            .text("client_secret", secret)
+            .text("redirect_uri", format!("http://127.0.0.1:{port}"))
+            .text("grant_type", "authorization_code");
 
-        let auth_code = future::block_on(future::poll_once(&mut task.0));
+        #[derive(Deserialize, Debug)]
+        struct GoogleTokenResponse {
+            access_token: String,
+        }
 
-        commands.promise(|| auth_code.unwrap())
-            .then(asyn!(|auth_code,
-                google_client_secret: Res<GoogleClientSecret>,
-                google_client_id: Res<GoogleClientId>,
-                redirect_port: Res<RedirectPort>|{
-                asyn::http::post("https://www.googleapis.com/oauth2/v3/token")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(format!("code={}&client_id={}&client_secret={}&redirect_uri=http://127.0.0.1:{}&grant_type=authorization_code",auth_code.value,google_client_id.0, google_client_secret.0, redirect_port.0))
-                .send()
-            }))
-            .then(asyn!(
-                |_, result,
-                firebase_api_key: Res<ApiKey>,
-                port: Res<RedirectPort>| {
+        #[derive(Deserialize, Debug)]
+        struct FirebaseTokenResponse {
+            #[serde(rename = "idToken")]
+            id_token: String,
+            #[serde(rename = "localId")]
+            local_id: String,
+            #[serde(rename = "refreshToken")]
+            refresh_token: String,
+        }
 
-                    let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
+        // Get Google Token
+        let google_token = client
+            .post("https://www.googleapis.com/oauth2/v3/token")
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+            .json::<GoogleTokenResponse>()
+            .await
+            .unwrap();
 
-                    let access_token = json.get("access_token").unwrap().as_str().unwrap();
+        println!("\nGOOGLE TOKEN RESPONSE:\n{:?}\n", google_token);
 
-                    asyn::http::post(format!(
-                        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}",
-                        firebase_api_key.0
-                    ))
-                    .header("content-type", "application/json")
-                    .body(format!(
-                        "{{\"postBody\":\"access_token={}&providerId={}\",
-                        \"requestUri\":\"http://127.0.0.1:{}\",
-                        \"returnIdpCredential\":true,
-                        \"returnSecureToken\":true}}",
-                        access_token, "google.com", port.0
-                    ))
-                    .send()
-                }
+        let access_token = google_token.access_token;
+
+        let mut body = HashMap::new();
+        body.insert(
+            "postBody",
+            format!("access_token={}&providerId={}", access_token, "google.com"),
+        );
+        body.insert("requestUri", format!("http://127.0.0.1:{port}"));
+        body.insert("returnIdpCredential", "true".into());
+        body.insert("returnSecureToken", "true".into());
+
+        // Get Firebase Token
+        let firebase_token = client
+            .post(format!(
+                "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}",
+                api_key
             ))
-            .then(asyn!(
-                _,
-                result,
-                mut commands:Commands,
-                mut next_state: ResMut<NextState<AuthState>>,
-                 => {
-                // TODO dry
-                let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json::<FirebaseTokenResponse>()
+            .await
+            .unwrap();
 
-                let id_token = json.get("idToken").unwrap().as_str().unwrap();
-                let uid = json.get("localId").unwrap().as_str().unwrap();
-                let refresh_token = json.get("refreshToken").unwrap().as_str().unwrap();
+        println!("\nFIREBASE TOKEN RESPONSE:\n{:?}\n", firebase_token);
 
-                commands.insert_resource(IdToken(id_token.into()));
-                commands.insert_resource(UserId(uid.into()));
-                commands.insert_resource(RefreshToken(Some(refresh_token.into())));
+        // Use Firebase Token TODO pull into fn?
+        ctx.run_on_main_thread(move |ctx| {
+            ctx.world.insert_resource(IdToken(firebase_token.id_token));
+            ctx.world.insert_resource(UserId(firebase_token.local_id));
+            ctx.world
+                .insert_resource(RefreshToken(Some(firebase_token.refresh_token)));
 
-                commands.remove_resource::<RedirectPort>();
-                commands.remove_resource::<GoogleToken>();
-                commands.remove_resource::<GoogleAuthCode>();
-                
-                next_state.set(AuthState::LoggedIn);
-            }));
-    }
+            // Set next state
+            ctx.world
+                .insert_resource(NextState(Some(AuthState::LoggedIn)));
+        })
+        .await;
+    });
 }
 
 fn save_refresh_token(refresh_token: Res<RefreshToken>) {
@@ -710,38 +729,53 @@ fn save_refresh_token(refresh_token: Res<RefreshToken>) {
 }
 
 fn refresh_login(
-    mut commands: Commands,
     refresh_token: Res<RefreshToken>,
     firebase_api_key: Res<ApiKey>,
+    runtime: ResMut<TokioTasksRuntime>,
 ) {
-    let tokens = (refresh_token.0.clone().unwrap(), firebase_api_key.0.clone());
+    let refresh_token = refresh_token.0.clone().unwrap();
+    let api_key = firebase_api_key.0.clone();
 
-    commands.add(
-        Promise::new(tokens, asyn!(state=>{
-            asyn::http::post(format!("https://securetoken.googleapis.com/v1/token?key={}",state.1))
+    runtime.spawn_background_task(|mut ctx| async move {
+        let client = reqwest::Client::new();
+
+        #[derive(Deserialize, Debug)]
+        struct FirebaseTokenResponse {
+            id_token: String,
+            user_id: String,
+            refresh_token: String,
+        }
+
+        let firebase_token = client
+            .post(format!(
+                "https://securetoken.googleapis.com/v1/token?key={}",
+                api_key
+            ))
             .header("content-type", "application/x-www-form-urlencoded")
-            .body(format!("grant_type=refresh_token&refresh_token={}",state.0))
+            .body(format!(
+                "grant_type=refresh_token&refresh_token={}",
+                refresh_token
+            ))
             .send()
-        }))
-        .then(asyn!(
-            _state,
-            result,
-            mut commands:Commands,
-            mut next_state: ResMut<NextState<AuthState>>,
-                => {
-            // TODO dry
-            // TODO dry     lol
-            let json = serde_json::from_str::<serde_json::Value>(result.unwrap().text().unwrap()).unwrap();
+            .await
+            .unwrap()
+            .json::<FirebaseTokenResponse>()
+            .await
+            .unwrap();
 
-            let id_token = json.get("id_token").unwrap().as_str().unwrap();
-            let uid = json.get("user_id").unwrap().as_str().unwrap();
-            let refresh_token = json.get("refresh_token").unwrap().as_str().unwrap();
+        println!("\nREFRESH TOKEN RESPONSE:\n{:?}\n", firebase_token);
 
-            commands.insert_resource(IdToken(id_token.into()));
-            commands.insert_resource(UserId(uid.into()));
-            commands.insert_resource(RefreshToken(Some(refresh_token.into())));
+        // Use Firebase Token TODO pull into fn?
+        ctx.run_on_main_thread(move |ctx| {
+            ctx.world.insert_resource(IdToken(firebase_token.id_token));
+            ctx.world.insert_resource(UserId(firebase_token.user_id));
+            ctx.world
+                .insert_resource(RefreshToken(Some(firebase_token.refresh_token)));
 
-            next_state.set(AuthState::LoggedIn);
-        }))
-    );
+            // Set next state
+            ctx.world
+                .insert_resource(NextState(Some(AuthState::LoggedIn)));
+        })
+        .await;
+    });
 }
