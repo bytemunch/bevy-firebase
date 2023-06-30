@@ -12,7 +12,7 @@ pub mod deps {
 
 use std::{
     collections::HashMap,
-    fs::{read_to_string, write},
+    fs::{read_to_string, remove_file, write},
     io::{self, BufRead, BufReader, Write},
     net::TcpListener,
     path::PathBuf,
@@ -451,6 +451,7 @@ pub struct GotAuthUrl(pub Url);
 pub enum AuthState {
     #[default]
     LoggedOut,
+    LogOut,
     Refreshing,
     LogIn,
     WaitForLogin,
@@ -508,7 +509,7 @@ impl Plugin for AuthPlugin {
             .add_system(poll_redirect_task.in_set(OnUpdate(AuthState::WaitForLogin)))
             .add_system(refresh_login.in_schedule(OnEnter(AuthState::Refreshing)))
             .add_system(save_refresh_token.in_schedule(OnEnter(AuthState::LoggedIn)))
-            .add_system(cleanup.in_schedule(OnEnter(AuthState::LoggedOut)));
+            .add_system(cleanup.in_schedule(OnEnter(AuthState::LogOut)));
     }
 }
 
@@ -527,8 +528,6 @@ pub fn log_in(
         next_state.set(AuthState::Refreshing);
     } else {
         next_state.set(AuthState::LogIn);
-
-        // TODO save refresh token
     }
 }
 
@@ -537,24 +536,21 @@ pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<Next
         return;
     }
 
-    // TODO delete refresh token
-
-    next_state.set(AuthState::LoggedOut);
+    next_state.set(AuthState::LogOut);
 }
 
-fn cleanup(mut commands: Commands) {
-    // commands.remove_resource::<GoogleClientId>();
-    // commands.remove_resource::<GoogleClientSecret>();
-    // commands.remove_resource::<ApiKey>();
-    // commands.remove_resource::<RefreshToken>();
-    // commands.remove_resource::<ProjectId>();
+fn cleanup(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>) {
     commands.remove_resource::<IdToken>();
     commands.remove_resource::<UserId>();
-    commands.remove_resource::<RedirectPort>();
-    commands.remove_resource::<GoogleToken>();
-    commands.remove_resource::<GoogleAuthCode>();
 
-    println!("Logged out.")
+    commands.insert_resource(RefreshToken(None));
+
+    let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
+    let _ = remove_file(data_dir.join("bevy-firebase/keys/firebase-refresh.key"));
+
+    next_state.set(AuthState::LoggedOut);
+
+    println!("Logged out.");
 }
 
 fn init_login(
@@ -695,8 +691,11 @@ fn poll_redirect_task(mut commands: Commands, mut q_task: Query<(Entity, &mut Re
                 commands.insert_resource(IdToken(id_token.into()));
                 commands.insert_resource(UserId(uid.into()));
                 commands.insert_resource(RefreshToken(Some(refresh_token.into())));
+
+                commands.remove_resource::<RedirectPort>();
+                commands.remove_resource::<GoogleToken>();
+                commands.remove_resource::<GoogleAuthCode>();
                 
-                // TODO cleanup other resources
                 next_state.set(AuthState::LoggedIn);
             }));
     }
@@ -704,7 +703,10 @@ fn poll_redirect_task(mut commands: Commands, mut q_task: Query<(Entity, &mut Re
 
 fn save_refresh_token(refresh_token: Res<RefreshToken>) {
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-    let _ = write(data_dir.join("bevy-firebase/keys/firebase-refresh.key"), refresh_token.0.as_ref().unwrap().as_str());
+    let _ = write(
+        data_dir.join("bevy-firebase/keys/firebase-refresh.key"),
+        refresh_token.0.as_ref().unwrap().as_str(),
+    );
 }
 
 fn refresh_login(
@@ -740,10 +742,6 @@ fn refresh_login(
             commands.insert_resource(RefreshToken(Some(refresh_token.into())));
 
             next_state.set(AuthState::LoggedIn);
-
-            // TODO cleanup other resources
         }))
     );
-
-    // TODO if error, clear all token resources (logout)
 }
