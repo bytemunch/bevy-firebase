@@ -7,6 +7,7 @@ pub mod deps {
 
     pub use tonic::Status;
 
+    pub use googleapis::google::firestore::v1::listen_response::ResponseType;
     pub use googleapis::google::firestore::v1::{value::ValueType, Value};
 }
 
@@ -46,7 +47,6 @@ use tonic::{
 };
 
 // FIRESTORE
-
 #[derive(Resource, Clone)]
 pub struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>);
 
@@ -196,7 +196,7 @@ pub fn add_listener(
             database: db.clone(),
             labels: HashMap::new(),
             target_change: Some(TargetChange::AddTarget(Target {
-                target_id: 0x52757374,
+                target_id: 0x52757374, // rust in hex, for... reasons?
                 once: false,
                 resume_type: None,
                 target_type: Some(TargetType::Documents(DocumentsTarget {
@@ -473,8 +473,6 @@ fn init_login(
 
     ew.send(GotAuthUrl(authorize_url));
 
-    // TODO use bevy-tokio-tasks here
-
     runtime.spawn_background_task(|mut ctx| async move {
         for stream in listener.incoming() {
             match stream {
@@ -498,7 +496,6 @@ fn init_login(
                         if let Some(code_pair) = code_pair {
                             let code = code_pair.1.into_owned();
                             ctx.run_on_main_thread(move |ctx| {
-                                println!("IN MAIN THREAD");
                                 ctx.world.insert_resource(GoogleAuthCode(code));
 
                                 ctx.world
@@ -580,8 +577,6 @@ fn auth_code_to_firebase_token(
             .await
             .unwrap();
 
-        println!("\nGOOGLE TOKEN RESPONSE:\n{:?}\n", google_token);
-
         let access_token = google_token.access_token;
 
         let mut body = HashMap::new();
@@ -606,8 +601,6 @@ fn auth_code_to_firebase_token(
             .json::<FirebaseTokenResponse>()
             .await
             .unwrap();
-
-        println!("\nFIREBASE TOKEN RESPONSE:\n{:?}\n", firebase_token);
 
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
@@ -666,8 +659,6 @@ fn refresh_login(
             .json::<FirebaseTokenResponse>()
             .await
             .unwrap();
-
-        println!("\nREFRESH TOKEN RESPONSE:\n{:?}\n", firebase_token);
 
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {

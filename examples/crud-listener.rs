@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_firebase::{
-    deps::{Status, Value, ValueType},
-    log_in, log_out, AuthState,
+    deps::{ResponseType, Status, Value, ValueType},
+    log_in, log_out, FirestoreState,
     {
         add_listener, create_document, delete_document, read_document, update_document,
         BevyFirestoreClient, ListenerEvent,
@@ -32,7 +32,7 @@ fn main() {
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
         .add_system(input)
-        .add_system(test_firestore_operations.in_schedule(OnEnter(AuthState::LoggedIn)))
+        .add_system(test_firestore_operations.in_schedule(OnEnter(FirestoreState::Ready)))
         .add_system(test_listener_system)
         .add_system(auth_url_listener)
         .add_state::<AppAuthState>()
@@ -59,7 +59,45 @@ fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
 
 fn test_listener_system(mut er: EventReader<ListenerEvent>) {
     for ev in er.iter() {
-        println!("EVENT! {:?}", ev.0);
+        match ev.0.res.response_type.as_ref().unwrap() {
+            ResponseType::TargetChange(response) => {
+                let change_type = response.target_change_type;
+
+                // TODO match on googleapis::google::firestore::v1::target_change::TargetChangeType
+                match change_type {
+                    0 => {
+                        // no change
+                    }
+                    1 => {
+                        // target added
+                    }
+                    2 => {
+                        // target removed
+                    }
+                    3 => {
+                        // target current (research needed lol)
+                    }
+                    4 => {
+                        // reset (also no idea)
+                    }
+                    _ => {
+                        // unknown response
+                    }
+                }
+            }
+            ResponseType::DocumentChange(response) => {
+                println!("Document Changed: {:?}", response.document.clone().unwrap());
+            }
+            ResponseType::DocumentDelete(response) => {
+                println!("Document Deleted: {:?}", response.document.clone());
+            }
+            ResponseType::DocumentRemove(response) => {
+                println!("Document Removed: {:?}", response.document.clone());
+            }
+            ResponseType::Filter(response) => {
+                println!("Filter: {:?}", response);
+            }
+        }
     }
 }
 
@@ -111,6 +149,13 @@ fn test_firestore_operations(
             "test_field".into(),
             Value {
                 value_type: Some(ValueType::IntegerValue(420)),
+            },
+        );
+
+        data.insert(
+            "another_field".into(),
+            Value {
+                value_type: Some(ValueType::StringValue("Ananas".into())),
             },
         );
 
