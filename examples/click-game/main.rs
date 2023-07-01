@@ -271,7 +271,18 @@ fn build_main_menu(
                     ..Default::default()
                 })
                 .with_text_alignment(typeface.text_alignment),
-            LogInScreenData,
+            MainMenuData,
+        ));
+
+        let name = "NAME HERE";
+
+        parent.spawn((
+            TextBundle::from_section(format!("welcome, {name} !"), typeface.text_style.clone())
+                .with_style(Style {
+                    ..Default::default()
+                })
+                .with_text_alignment(typeface.text_alignment),
+            MainMenuData,
         ));
     });
     // play button

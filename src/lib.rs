@@ -119,7 +119,7 @@ fn init(mut next_state: ResMut<NextState<FirestoreState>>) {
 
 fn create_client(
     runtime: ResMut<TokioTasksRuntime>,
-    user_info: Res<UserInfo>,
+    user_info: Res<TokenData>,
     emulator: Option<Res<EmulatorUrl>>,
     project_id: Res<ProjectId>,
 ) {
@@ -311,19 +311,11 @@ struct ApiKey(String);
 #[derive(Resource)]
 pub struct ProjectId(pub String);
 
-// Retrieved / From plugin
-#[derive(Resource)]
-pub struct RefreshToken(Option<String>);
-
 // TODO big struct that holds all of the returned info from auth
 
 // Retrieved
 #[derive(Deserialize, Resource, Default)]
-pub struct UserInfo {
-    #[serde(rename = "federatedId")]
-    pub federated_id: Option<String>,
-    #[serde(rename = "providerId")]
-    pub provider_id: Option<String>,
+pub struct TokenData {
     #[serde(rename = "localId")]
     #[serde(alias = "user_id")]
     pub local_id: String,
@@ -429,7 +421,7 @@ impl Plugin for AuthPlugin {
             .insert_resource(GoogleClientSecret(self.google_client_secret.clone()))
             .insert_resource(ApiKey(self.firebase_api_key.clone()))
             .insert_resource(ProjectId(self.firebase_project_id.clone()))
-            .insert_resource(RefreshToken(self.firebase_refresh_token.clone()))
+            .insert_resource(TokenData::default())
             .add_state::<AuthState>()
             .add_event::<GotAuthUrl>()
             .add_system(init_login.in_schedule(OnEnter(AuthState::LogIn)))
@@ -438,6 +430,13 @@ impl Plugin for AuthPlugin {
             .add_system(save_refresh_token.in_schedule(OnEnter(AuthState::LoggedIn)))
             .add_system(login_clear_resources.in_schedule(OnEnter(AuthState::LogOut)))
             .add_system(logout_clear_resources.in_schedule(OnEnter(AuthState::LogOut)));
+
+        if self.firebase_refresh_token.is_some() {
+            app.insert_resource(TokenData {
+                refresh_token: self.firebase_refresh_token.clone().unwrap(),
+                ..Default::default()
+            });
+        }
     }
 }
 
@@ -446,16 +445,16 @@ impl Plugin for AuthPlugin {
 pub fn log_in(
     current_state: Res<State<AuthState>>,
     mut next_state: ResMut<NextState<AuthState>>,
-    refresh_token: Res<RefreshToken>,
+    token_data: Res<TokenData>,
 ) {
     if current_state.0 != AuthState::LoggedOut {
         return;
     }
 
-    if let Some(_token) = refresh_token.0.clone() {
-        next_state.set(AuthState::Refreshing);
-    } else {
+    if token_data.refresh_token.clone().is_empty() {
         next_state.set(AuthState::LogIn);
+    } else {
+        next_state.set(AuthState::Refreshing);
     }
 }
 
@@ -468,9 +467,7 @@ pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<Next
 }
 
 fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>) {
-    commands.remove_resource::<UserInfo>();
-
-    commands.insert_resource(RefreshToken(None));
+    commands.remove_resource::<TokenData>();
 
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
     let _ = remove_file(data_dir.join("bevy-firebase/keys/firebase-refresh.key"));
@@ -619,15 +616,12 @@ fn auth_code_to_firebase_token(
             .send()
             .await
             .unwrap()
-            .json::<UserInfo>()
+            .json::<TokenData>()
             .await
             .unwrap();
 
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
-            ctx.world
-                .insert_resource(RefreshToken(Some(firebase_token.refresh_token.clone())));
-
             ctx.world.insert_resource(firebase_token);
 
             // Set next state
@@ -638,20 +632,20 @@ fn auth_code_to_firebase_token(
     });
 }
 
-fn save_refresh_token(refresh_token: Res<RefreshToken>) {
+fn save_refresh_token(token_data: Res<TokenData>) {
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
     let _ = write(
         data_dir.join("bevy-firebase/keys/firebase-refresh.key"),
-        refresh_token.0.as_ref().unwrap().as_str(),
+        token_data.refresh_token.as_str(),
     );
 }
 
 fn refresh_login(
-    refresh_token: Res<RefreshToken>,
+    token_data: Res<TokenData>,
     firebase_api_key: Res<ApiKey>,
     runtime: ResMut<TokioTasksRuntime>,
 ) {
-    let refresh_token = refresh_token.0.clone().unwrap();
+    let refresh_token = token_data.refresh_token.clone();
     let api_key = firebase_api_key.0.clone();
 
     runtime.spawn_background_task(|mut ctx| async move {
@@ -670,15 +664,12 @@ fn refresh_login(
             .send()
             .await
             .unwrap()
-            .json::<UserInfo>()
+            .json::<TokenData>()
             .await
             .unwrap();
 
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
-            ctx.world
-                .insert_resource(RefreshToken(Some(firebase_token.refresh_token.clone())));
-
             ctx.world.insert_resource(firebase_token);
 
             // Set next state

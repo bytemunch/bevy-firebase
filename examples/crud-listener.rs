@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_firebase::{
     deps::{ResponseType, Status, Value, ValueType},
-    log_in, log_out, FirestoreState, UserInfo,
+    log_in, log_out, FirestoreState, TokenData,
     {
         add_listener, create_document, delete_document, read_document, update_document,
         BevyFirestoreClient, ListenerEvent,
@@ -105,7 +105,7 @@ fn test_firestore_operations(
     client: ResMut<BevyFirestoreClient>,
     runtime: ResMut<TokioTasksRuntime>,
     project_id: Res<ProjectId>,
-    user_info: Res<UserInfo>,
+    user_info: Res<TokenData>,
 ) {
     let uid = user_info.local_id.clone();
     let project_id = project_id.0.clone();
