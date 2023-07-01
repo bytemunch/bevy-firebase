@@ -119,11 +119,11 @@ fn init(mut next_state: ResMut<NextState<FirestoreState>>) {
 
 fn create_client(
     runtime: ResMut<TokioTasksRuntime>,
-    id_token: Res<IdToken>,
+    user_info: Res<UserInfo>,
     emulator: Option<Res<EmulatorUrl>>,
     project_id: Res<ProjectId>,
 ) {
-    let id_token = id_token.0.clone();
+    let id_token = user_info.id_token.clone();
     let project_id = project_id.0.clone();
 
     let emulator_url = match emulator {
@@ -315,13 +315,50 @@ pub struct ProjectId(pub String);
 #[derive(Resource)]
 pub struct RefreshToken(Option<String>);
 
-// Retrieved
-#[derive(Resource)]
-pub struct IdToken(pub String);
+// TODO big struct that holds all of the returned info from auth
 
 // Retrieved
-#[derive(Resource)]
-pub struct UserId(pub String);
+#[derive(Deserialize, Resource, Default)]
+pub struct UserInfo {
+    #[serde(rename = "federatedId")]
+    pub federated_id: Option<String>,
+    #[serde(rename = "providerId")]
+    pub provider_id: Option<String>,
+    #[serde(rename = "localId")]
+    #[serde(alias = "user_id")]
+    pub local_id: String,
+    #[serde(rename = "emailVerified")]
+    pub email_verified: Option<bool>,
+    #[serde(rename = "email")]
+    pub email: Option<String>,
+    #[serde(rename = "oauthIdToken")]
+    pub oauth_id_token: Option<String>,
+    #[serde(rename = "oauthAccessToken")]
+    pub oauth_access_token: Option<String>,
+    #[serde(rename = "oauthTokenSecret")]
+    pub oauth_token_secret: Option<String>,
+    #[serde(rename = "rawUserInfo")]
+    pub raw_user_info: Option<String>,
+    #[serde(rename = "firstName")]
+    pub first_name: Option<String>,
+    #[serde(rename = "lastName")]
+    pub last_name: Option<String>,
+    #[serde(rename = "fullName")]
+    pub full_name: Option<String>,
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(rename = "photoUrl")]
+    pub photo_url: Option<String>,
+    #[serde(rename = "idToken")]
+    #[serde(alias = "id_token")]
+    pub id_token: String,
+    #[serde(rename = "refreshToken")]
+    #[serde(alias = "refresh_token")]
+    pub refresh_token: String,
+    #[serde(rename = "expiresIn")]
+    #[serde(alias = "expires_in")]
+    pub expires_in: String,
+}
 
 // Retrieved
 #[derive(Resource)]
@@ -431,8 +468,7 @@ pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<Next
 }
 
 fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>) {
-    commands.remove_resource::<IdToken>();
-    commands.remove_resource::<UserId>();
+    commands.remove_resource::<UserInfo>();
 
     commands.insert_resource(RefreshToken(None));
 
@@ -551,16 +587,6 @@ fn auth_code_to_firebase_token(
             access_token: String,
         }
 
-        #[derive(Deserialize, Debug)]
-        struct FirebaseTokenResponse {
-            #[serde(rename = "idToken")]
-            id_token: String,
-            #[serde(rename = "localId")]
-            local_id: String,
-            #[serde(rename = "refreshToken")]
-            refresh_token: String,
-        }
-
         // Get Google Token
         let google_token = client
             .post("https://www.googleapis.com/oauth2/v3/token")
@@ -593,16 +619,16 @@ fn auth_code_to_firebase_token(
             .send()
             .await
             .unwrap()
-            .json::<FirebaseTokenResponse>()
+            .json::<UserInfo>()
             .await
             .unwrap();
 
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
-            ctx.world.insert_resource(IdToken(firebase_token.id_token));
-            ctx.world.insert_resource(UserId(firebase_token.local_id));
             ctx.world
-                .insert_resource(RefreshToken(Some(firebase_token.refresh_token)));
+                .insert_resource(RefreshToken(Some(firebase_token.refresh_token.clone())));
+
+            ctx.world.insert_resource(firebase_token);
 
             // Set next state
             ctx.world
@@ -631,13 +657,6 @@ fn refresh_login(
     runtime.spawn_background_task(|mut ctx| async move {
         let client = reqwest::Client::new();
 
-        #[derive(Deserialize, Debug)]
-        struct FirebaseTokenResponse {
-            id_token: String,
-            user_id: String,
-            refresh_token: String,
-        }
-
         let firebase_token = client
             .post(format!(
                 "https://securetoken.googleapis.com/v1/token?key={}",
@@ -651,16 +670,16 @@ fn refresh_login(
             .send()
             .await
             .unwrap()
-            .json::<FirebaseTokenResponse>()
+            .json::<UserInfo>()
             .await
             .unwrap();
 
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
-            ctx.world.insert_resource(IdToken(firebase_token.id_token));
-            ctx.world.insert_resource(UserId(firebase_token.user_id));
             ctx.world
-                .insert_resource(RefreshToken(Some(firebase_token.refresh_token)));
+                .insert_resource(RefreshToken(Some(firebase_token.refresh_token.clone())));
+
+            ctx.world.insert_resource(firebase_token);
 
             // Set next state
             ctx.world
