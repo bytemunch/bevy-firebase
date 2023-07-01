@@ -17,8 +17,6 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     net::TcpListener,
     path::PathBuf,
-    thread::sleep,
-    time::Duration,
 };
 
 use serde::Deserialize;
@@ -107,8 +105,7 @@ impl Plugin for FirestorePlugin {
             .add_event::<ListenerEvent>()
             .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
             .add_system(init.in_schedule(OnEnter(FirestoreState::Init)))
-            .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)))
-            .add_system(client_added.in_schedule(OnEnter(FirestoreState::Ready)));
+            .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)));
     }
 }
 
@@ -176,10 +173,6 @@ fn create_client(
         })
         .await;
     });
-}
-
-fn client_added(client: Res<BevyFirestoreClient>) {
-    println!("Client added! {:?}\n", client.0)
 }
 
 pub fn add_listener(
@@ -474,6 +467,8 @@ fn init_login(
     ew.send(GotAuthUrl(authorize_url));
 
     runtime.spawn_background_task(|mut ctx| async move {
+        // TODO fix blocking that prevents closing the app ???
+
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
@@ -517,7 +512,7 @@ fn init_login(
                     break;
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    sleep(Duration::from_secs(1));
+                    ctx.sleep_updates(60).await;
                     continue;
                 }
                 Err(e) => {
