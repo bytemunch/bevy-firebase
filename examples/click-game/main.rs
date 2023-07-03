@@ -46,7 +46,7 @@ struct LeaderboardData;
 
 fn main() {
     App::new()
-        // plugins
+        // PLUGINS
         .add_plugins(DefaultPlugins)
         .add_plugin(bevy_firebase::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
@@ -56,28 +56,30 @@ fn main() {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
-        // states
+        // STATES
         .add_state::<AppAuthState>()
         .add_state::<AppScreenState>()
-        // init
+        // INIT
         .add_startup_system(setup)
-        // app-wide
+        // UTILS
         .add_system(button_color_system)
-        // login
+        // LOGIN
         .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
         .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
-        // screens
+        .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
+        .add_system(logged_out.in_schedule(OnEnter(AuthState::LoggedOut)))
+        // SCREENS
         // login
         .add_system(build_login_screen.in_schedule(OnEnter(AppScreenState::LogInScreen)))
         .add_system(
             despawn_with::<LogInScreenData>.in_schedule(OnExit(AppScreenState::LogInScreen)),
         )
         .add_system(login_button_system.in_set(OnUpdate(AppScreenState::LogInScreen)))
-        .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
         .add_system(auth_url_listener.in_set(OnUpdate(AppAuthState::LogIn)))
         // menu
         .add_system(build_main_menu.in_schedule(OnEnter(AppScreenState::MainMenu)))
         .add_system(despawn_with::<MainMenuData>.in_schedule(OnExit(AppScreenState::MainMenu)))
+        .add_system(play_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         // in game
         .add_system(build_in_game.in_schedule(OnEnter(AppScreenState::InGame)))
         .add_system(despawn_with::<InGameData>.in_schedule(OnExit(AppScreenState::InGame)))
@@ -90,45 +92,98 @@ fn main() {
 }
 
 #[derive(Resource, Clone)]
-struct TitleTypeface {
-    text_style: TextStyle,
-    text_alignment: TextAlignment,
+struct UiSettings {
+    typefaces: TypeFaces,
+    button: ButtonBundle,
 }
 
-#[derive(Resource, Clone)]
-struct ButtonTypeface {
-    text_style: TextStyle,
-    text_alignment: TextAlignment,
+#[derive(Clone)]
+struct TypeFaces {
+    h1: TextStyle,
+    h2: TextStyle,
+    p: TextStyle,
 }
 
 #[derive(Component)]
 struct UiBase;
 
+// LOGIN
+
 #[derive(Component)]
 struct LoginButton(String);
 
+// MENU
+
+#[derive(Component)]
+struct LogoutButton;
+
+#[derive(Component)]
+struct PlayButton;
+
+#[derive(Component)]
+struct NicknameSubmitButton;
+
+#[derive(Component)]
+struct NicknameInput;
+
+#[derive(Component)]
+struct DeleteDataButton;
+
+#[derive(Component)]
+struct DeleteAccountButton;
+
+#[derive(Component)]
+struct LeaderboardButton;
+
+// IN GAME
+
+#[derive(Component)]
+struct ScoreButton;
+
+#[derive(Component)]
+struct SubmitScoreButton;
+
+#[derive(Component)]
+struct ReturnToMenuButton;
+
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(Camera2dBundle::default());
+
+    // SETUP UI
     let font = asset_server.load("fonts/HackNerdFont-Regular.ttf");
 
-    commands.insert_resource(TitleTypeface {
-        text_style: TextStyle {
+    let typefaces = TypeFaces {
+        h1: TextStyle {
             font: font.clone(),
             font_size: 60.0,
             color: TEXT_COLOR,
         },
-        text_alignment: TextAlignment::Center,
-    });
-
-    commands.insert_resource(ButtonTypeface {
-        text_style: TextStyle {
-            font,
-            font_size: 30.0,
+        h2: TextStyle {
+            font: font.clone(),
+            font_size: 40.0,
             color: TEXT_COLOR,
         },
-        text_alignment: TextAlignment::Center,
-    });
+        p: TextStyle {
+            font,
+            font_size: 20.0,
+            color: TEXT_COLOR,
+        },
+    };
 
-    commands.spawn(Camera2dBundle::default());
+    let button = ButtonBundle {
+        style: Style {
+            size: Size::new(Val::Px(300.0), Val::Px(65.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            margin: UiRect {
+                top: Val::Px(10.),
+                ..Default::default()
+            },
+            ..default()
+        },
+        background_color: NORMAL_BUTTON.into(),
+        ..Default::default()
+    };
 
     commands
         .spawn(NodeBundle {
@@ -143,33 +198,19 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             ..default()
         })
-        .insert(UiBase);
-}
-
-fn build_login_screen(
-    mut commands: Commands,
-    mut next_state: ResMut<NextState<AppAuthState>>,
-    mut q_ui_base: Query<Entity, With<UiBase>>,
-    typeface: Res<TitleTypeface>,
-) {
-    println!("build_login_screen");
-    let ui_base = q_ui_base.single_mut();
-
-    // title
-    commands.entity(ui_base).with_children(|parent| {
-        parent.spawn((
-            TextBundle::from_section("login", typeface.text_style.clone())
-                .with_style(Style {
+        .insert(UiBase)
+        .with_children(|parent| {
+            parent.spawn((
+                TextBundle::from_section("CLiCK", typefaces.h1.clone()).with_style(Style {
                     ..Default::default()
-                })
-                .with_text_alignment(typeface.text_alignment),
-            LogInScreenData,
-        ));
-    });
+                }),
+            ));
+        });
 
-    // attempt auto login
-    next_state.set(AppAuthState::LogIn);
+    commands.insert_resource(UiSettings { typefaces, button });
 }
+
+// UTILS
 
 fn button_color_system(
     mut interaction_query: Query<
@@ -190,6 +231,31 @@ fn button_color_system(
             }
         }
     }
+}
+
+// LOGIN
+
+fn build_login_screen(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<AppAuthState>>,
+    mut q_ui_base: Query<Entity, With<UiBase>>,
+    ui: Res<UiSettings>,
+) {
+    println!("build_login_screen");
+    let ui_base = q_ui_base.single_mut();
+
+    // title
+    commands.entity(ui_base).with_children(|parent| {
+        parent.spawn((
+            TextBundle::from_section("login", ui.typefaces.h2.clone()).with_style(Style {
+                ..Default::default()
+            }),
+            LogInScreenData,
+        ));
+    });
+
+    // attempt auto login
+    next_state.set(AppAuthState::LogIn);
 }
 
 fn login_button_system(
@@ -214,7 +280,7 @@ fn auth_url_listener(
     mut commands: Commands,
     mut er: EventReader<GotAuthUrl>,
     mut q_ui_base: Query<Entity, With<UiBase>>,
-    typeface: Res<ButtonTypeface>,
+    ui: Res<UiSettings>,
 ) {
     for e in er.iter() {
         println!("Go to this URL to sign in:\n{}\n", e.0);
@@ -239,11 +305,10 @@ fn auth_url_listener(
                 .insert(LoginButton(e.0.clone().into()))
                 .insert(LogInScreenData)
                 .with_children(|parent| {
-                    parent.spawn(
-                        TextBundle::from_section("log in with google", typeface.text_style.clone())
-                            .with_style(Style::default())
-                            .with_text_alignment(typeface.text_alignment),
-                    );
+                    parent.spawn(TextBundle::from_section(
+                        "log in with google",
+                        ui.typefaces.p.clone(),
+                    ));
                 });
         });
     }
@@ -255,53 +320,166 @@ fn logged_in(mut next_state: ResMut<NextState<AppScreenState>>) {
     next_state.set(AppScreenState::MainMenu);
 }
 
+fn logged_out(mut next_state: ResMut<NextState<AppScreenState>>) {
+    println!("logged_out");
+    // set app state to main menu
+    next_state.set(AppScreenState::LogInScreen);
+}
+
+// MENU
+
 fn build_main_menu(
     mut commands: Commands,
     mut q_ui_base: Query<Entity, With<UiBase>>,
-    typeface: Res<TitleTypeface>,
+    ui: Res<UiSettings>,
 ) {
     println!("build_main_menu");
     let ui_base = q_ui_base.single_mut();
 
-    // title
+    // UI
     commands.entity(ui_base).with_children(|parent| {
+        // TITLE
         parent.spawn((
-            TextBundle::from_section("main menu", typeface.text_style.clone())
-                .with_style(Style {
-                    ..Default::default()
-                })
-                .with_text_alignment(typeface.text_alignment),
+            TextBundle::from_section("main menu", ui.typefaces.h2.clone()),
             MainMenuData,
         ));
 
+        // WELCOME
         let name = "NAME HERE";
+        // TODO grab name from firestore, if none found add placeholder
 
         parent.spawn((
-            TextBundle::from_section(format!("welcome, {name} !"), typeface.text_style.clone())
-                .with_style(Style {
-                    ..Default::default()
-                })
-                .with_text_alignment(typeface.text_alignment),
+            TextBundle::from_section(format!("welcome, {name}!"), ui.typefaces.p.clone()),
             MainMenuData,
         ));
+
+        // PLAY BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(PlayButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section("play", ui.typefaces.p.clone()));
+            });
+
+        // TODO: NICKNAME TEXT ENTRY
+
+        // NICKNAME SUBMIT BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(NicknameSubmitButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section("set name", ui.typefaces.p.clone()));
+            });
+
+        // LOGOUT BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(LogoutButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section("log out", ui.typefaces.p.clone()));
+            });
+
+        // DELETE ACCOUNT BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(DeleteAccountButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "delete account",
+                    ui.typefaces.p.clone(),
+                ));
+            });
     });
-    // play button
-
-    // nickname text entry
-    // nickname submit button
-
-    // log out button
-
-    // delete account button
 }
 
-fn build_in_game(mut _commands: Commands) {
+fn play_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<PlayButton>)>,
+    mut next_state: ResMut<NextState<AppScreenState>>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            // Go to in game state
+            next_state.set(AppScreenState::InGame)
+        }
+    }
+}
+
+fn logout_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<LogoutButton>)>,
+    mut next_state: ResMut<NextState<AppAuthState>>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            // Go to in game state
+            next_state.set(AppAuthState::LogOut)
+        }
+    }
+}
+
+// IN GAME
+
+fn build_in_game(
+    mut commands: Commands,
+    mut q_ui_base: Query<Entity, With<UiBase>>,
+    ui: Res<UiSettings>,
+) {
     println!("build_in_game");
-    // title
-    // score
-    // add score button
-    // submit score button
-    // exit to menu button
+    let ui_base = q_ui_base.single_mut();
+
+    // UI
+    commands.entity(ui_base).with_children(|parent| {
+        // TITLE
+        parent.spawn((
+            TextBundle::from_section("in game", ui.typefaces.h2.clone()),
+            InGameData,
+        ));
+
+        // SCORE
+        parent.spawn((
+            TextBundle::from_section("score: 0", ui.typefaces.p.clone()),
+            InGameData,
+        ));
+
+        // ADD SCORE BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(ScoreButton)
+            .insert(InGameData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "add score",
+                    ui.typefaces.p.clone(),
+                ));
+            });
+
+        // SUBMIT SCORE BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(SubmitScoreButton)
+            .insert(InGameData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "submit score",
+                    ui.typefaces.p.clone(),
+                ));
+            });
+
+        // RETURN TO MENU BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(ReturnToMenuButton)
+            .insert(InGameData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "back to menu",
+                    ui.typefaces.p.clone(),
+                ));
+            });
+    });
 }
 
 fn build_leaderboard(mut _commands: Commands) {
