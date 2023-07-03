@@ -6,6 +6,7 @@ use std::{
     path::PathBuf,
 };
 
+use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
@@ -25,7 +26,7 @@ struct GoogleClientSecret(String);
 
 // From plugin
 #[derive(Resource)]
-struct ApiKey(String);
+pub struct ApiKey(String);
 
 // From plugin
 #[derive(Resource)]
@@ -187,7 +188,7 @@ fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextSta
     commands.remove_resource::<TokenData>();
 
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-    let _ = remove_file(data_dir.join("bevy-firebase/keys/firebase-refresh.key"));
+    let _ = remove_file(data_dir.join("keys/firebase-refresh.key"));
 
     next_state.set(AuthState::LoggedOut);
 
@@ -361,7 +362,7 @@ fn auth_code_to_firebase_token(
 fn save_refresh_token(token_data: Res<TokenData>) {
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
     let _ = write(
-        data_dir.join("bevy-firebase/keys/firebase-refresh.key"),
+        data_dir.join("keys/firebase-refresh.key"),
         token_data.refresh_token.as_str(),
     );
 }
@@ -375,7 +376,7 @@ fn refresh_login(
     let api_key = firebase_api_key.0.clone();
 
     runtime.spawn_background_task(|mut ctx| async move {
-        let client = reqwest::Client::new();
+        let client = Client::new();
 
         let firebase_token = client
             .post(format!(
@@ -394,6 +395,8 @@ fn refresh_login(
             .await
             .unwrap();
 
+        // TODO handle errors here, panic prevents login button being generated
+
         // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
             ctx.world.insert_resource(firebase_token);
@@ -401,6 +404,44 @@ fn refresh_login(
             // Set next state
             ctx.world
                 .insert_resource(NextState(Some(AuthState::LoggedIn)));
+        })
+        .await;
+    });
+}
+
+pub fn delete_account(
+    token_data: Res<TokenData>,
+    firebase_api_key: Res<ApiKey>,
+    runtime: ResMut<TokioTasksRuntime>,
+) {
+    let api_key = firebase_api_key.0.clone();
+    let id_token = token_data.id_token.clone();
+
+    runtime.spawn_background_task(|mut ctx| async move {
+        let client = Client::new();
+        let mut body = HashMap::new();
+        body.insert("idToken", id_token);
+
+        let res = client
+            .post(format!(
+                "https://identitytoolkit.googleapis.com/v1/accounts:delete?key={}",
+                api_key
+            ))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await;
+
+        // TODO handle errors like CREDENTIAL_TOO_OLD
+
+        // Use Firebase Token TODO pull into fn?
+        ctx.run_on_main_thread(move |ctx| {
+            // Set next state
+            ctx.world
+                .insert_resource(NextState(Some(AuthState::LogOut)));
         })
         .await;
     });

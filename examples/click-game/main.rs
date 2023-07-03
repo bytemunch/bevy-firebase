@@ -6,7 +6,7 @@
 mod util;
 
 use bevy::{app::AppExit, prelude::*};
-use bevy_firebase_auth::{log_in, log_out, AuthState, GotAuthUrl};
+use bevy_firebase_auth::{delete_account, log_in, log_out, AuthState, GotAuthUrl};
 use util::despawn_with;
 
 // colours
@@ -16,11 +16,12 @@ const PRESSED_BUTTON: Color = Color::rgb(0.35, 0.75, 0.35);
 const TEXT_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
 
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
-enum AppAuthState {
+enum AuthControllerState {
     #[default]
     Start,
     LogIn,
     LogOut,
+    Delete,
 }
 
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
@@ -57,7 +58,7 @@ fn main() {
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
         // STATES
-        .add_state::<AppAuthState>()
+        .add_state::<AuthControllerState>()
         .add_state::<AppScreenState>()
         // INIT
         .add_startup_system(setup)
@@ -65,8 +66,9 @@ fn main() {
         .add_system(button_color_system)
         .add_system(exit_button_system)
         // LOGIN
-        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
-        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        .add_system(log_in.in_schedule(OnEnter(AuthControllerState::LogIn)))
+        .add_system(log_out.in_schedule(OnEnter(AuthControllerState::LogOut)))
+        .add_system(delete_account.in_schedule(OnEnter(AuthControllerState::Delete)))
         .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
         .add_system(logged_out.in_schedule(OnEnter(AuthState::LoggedOut)))
         // SCREENS
@@ -76,7 +78,7 @@ fn main() {
             despawn_with::<LogInScreenData>.in_schedule(OnExit(AppScreenState::LogInScreen)),
         )
         .add_system(login_button_system.in_set(OnUpdate(AppScreenState::LogInScreen)))
-        .add_system(auth_url_listener.in_set(OnUpdate(AppAuthState::LogIn)))
+        .add_system(auth_url_listener.in_set(OnUpdate(AuthControllerState::LogIn)))
         // menu
         .add_system(build_main_menu.in_schedule(OnEnter(AppScreenState::MainMenu)))
         .add_system(despawn_with::<MainMenuData>.in_schedule(OnExit(AppScreenState::MainMenu)))
@@ -274,7 +276,7 @@ fn exit_button_system(
 
 fn build_login_screen(
     mut commands: Commands,
-    mut next_state: ResMut<NextState<AppAuthState>>,
+    mut next_state: ResMut<NextState<AuthControllerState>>,
     mut q_ui_base: Query<Entity, With<UiBase>>,
     ui: Res<UiSettings>,
 ) {
@@ -300,7 +302,7 @@ fn build_login_screen(
     });
 
     // attempt auto login
-    next_state.set(AppAuthState::LogIn);
+    next_state.set(AuthControllerState::LogIn);
 }
 
 fn login_button_system(
@@ -515,12 +517,12 @@ fn delete_data_button_system(
 
 fn logout_button_system(
     mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<LogoutButton>)>,
-    mut next_state: ResMut<NextState<AppAuthState>>,
+    mut next_state: ResMut<NextState<AuthControllerState>>,
 ) {
     for (interaction,) in &mut interaction_query {
         if *interaction == Interaction::Clicked {
             // Go to in game state
-            next_state.set(AppAuthState::LogOut)
+            next_state.set(AuthControllerState::LogOut)
         }
     }
 }
@@ -530,13 +532,13 @@ fn delete_account_button_system(
         (&Interaction,),
         (Changed<Interaction>, With<DeleteAccountButton>),
     >,
+    mut next_state: ResMut<NextState<AuthControllerState>>,
 ) {
     for (interaction,) in &mut interaction_query {
         if *interaction == Interaction::Clicked {
-            // TODO
-            println!("TODO: unimplemented function")
+            next_state.set(AuthControllerState::Delete)
 
-            // TODO delete from firestore
+            // TODO delete data from firestore
             // + set app state to logged out
         }
     }
