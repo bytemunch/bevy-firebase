@@ -8,6 +8,7 @@ pub mod deps {
     pub use tonic::Status;
 
     pub use googleapis::google::firestore::v1::listen_response::ResponseType;
+    pub use googleapis::google::firestore::v1::ListenResponse;
     pub use googleapis::google::firestore::v1::{value::ValueType, Value};
 }
 
@@ -50,13 +51,6 @@ pub struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, Fireb
 
 #[derive(Resource, Clone)]
 struct EmulatorUrl(String);
-
-#[derive(Debug)]
-pub struct ListenerEventInner {
-    pub res: ListenResponse,
-    pub id: String, // HACK: used to differentiate between listeners, i don't understand how to take a custom event
-}
-pub struct ListenerEvent(pub ListenerEventInner);
 
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum FirestoreState {
@@ -102,7 +96,6 @@ impl Plugin for FirestorePlugin {
         }
 
         app.add_state::<FirestoreState>()
-            .add_event::<ListenerEvent>()
             .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
             .add_system(init.in_schedule(OnEnter(FirestoreState::Init)))
             .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)));
@@ -175,13 +168,18 @@ fn create_client(
     });
 }
 
-pub fn add_listener(
+pub trait ListenerEventBuilder {
+    fn new(msg: ListenResponse) -> Self;
+}
+
+pub fn add_listener<T>(
     runtime: &ResMut<TokioTasksRuntime>,
     client: &mut BevyFirestoreClient,
     project_id: String,
     target: String,
-    listener_id: String,
-) {
+) where
+    T: ListenerEventBuilder + std::marker::Send + std::marker::Sync + 'static,
+{
     let mut client = client.0.clone();
     runtime.spawn_background_task(|mut ctx| async move {
         let db = format!("projects/{project_id}/databases/(default)");
@@ -207,15 +205,8 @@ pub fn add_listener(
         let mut res = res.into_inner();
 
         while let Some(msg) = res.next().await {
-            let listener_id = listener_id.clone();
-
             ctx.run_on_main_thread(move |ctx| {
-                // TODO allow user defined events
-                ctx.world.send_event(ListenerEvent(ListenerEventInner {
-                    res: msg.unwrap(),
-                    id: listener_id,
-                }));
-                // TODO test if awaiting here drops events
+                ctx.world.send_event(T::new(msg.unwrap()));
             })
             .await;
         }

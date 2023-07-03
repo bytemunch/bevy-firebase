@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_firebase::{
-    deps::{ResponseType, Status, Value, ValueType},
-    log_in, log_out, FirestoreState, TokenData,
+    deps::{ListenResponse, ResponseType, Status, Value, ValueType},
+    log_in, log_out, FirestoreState, ListenerEventBuilder, TokenData,
     {
         add_listener, create_document, delete_document, read_document, update_document,
-        BevyFirestoreClient, ListenerEvent,
+        BevyFirestoreClient,
     },
     {GotAuthUrl, ProjectId},
 };
@@ -18,6 +18,16 @@ enum AppAuthState {
     Setup,
     LogIn,
     LogOut,
+}
+
+pub struct MyListenerEvent {
+    pub msg: ListenResponse,
+}
+
+impl ListenerEventBuilder for MyListenerEvent {
+    fn new(msg: ListenResponse) -> Self {
+        MyListenerEvent { msg }
+    }
 }
 
 fn main() {
@@ -38,6 +48,7 @@ fn main() {
         .add_state::<AppAuthState>()
         .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
         .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        .add_event::<MyListenerEvent>()
         .run();
 }
 
@@ -57,9 +68,9 @@ fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
     }
 }
 
-fn test_listener_system(mut er: EventReader<ListenerEvent>) {
+fn test_listener_system(mut er: EventReader<MyListenerEvent>) {
     for ev in er.iter() {
-        match ev.0.res.response_type.as_ref().unwrap() {
+        match ev.msg.response_type.as_ref().unwrap() {
             ResponseType::TargetChange(response) => {
                 let change_type = response.target_change_type;
 
@@ -122,12 +133,11 @@ fn test_firestore_operations(
 
     let document_path = &format!("lobbies/{}", uid);
 
-    add_listener(
+    add_listener::<MyListenerEvent>(
         &runtime,
         &mut client,
         project_id.clone(),
         document_path.clone(),
-        "test".into(),
     );
 
     runtime.spawn_background_task(|mut ctx| async move {
