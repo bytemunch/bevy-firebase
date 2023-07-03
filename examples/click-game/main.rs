@@ -5,8 +5,18 @@
 
 mod util;
 
+use std::collections::HashMap;
+
 use bevy::{app::AppExit, prelude::*};
-use bevy_firebase_auth::{delete_account, log_in, log_out, AuthState, GotAuthUrl};
+use bevy_firebase_auth::{
+    delete_account, log_in, log_out, AuthState, GotAuthUrl, ProjectId, TokenData,
+};
+use bevy_firebase_firestore::{
+    delete_document,
+    deps::{Value, ValueType},
+    update_document, BevyFirestoreClient, FirestoreState,
+};
+use bevy_tokio_tasks::TokioTasksRuntime;
 use util::despawn_with;
 
 // colours
@@ -70,6 +80,7 @@ fn main() {
         .add_system(log_out.in_schedule(OnEnter(AuthControllerState::LogOut)))
         .add_system(delete_account.in_schedule(OnEnter(AuthControllerState::Delete)))
         .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
+        .add_system(firestore_ready.in_schedule(OnEnter(FirestoreState::Ready)))
         .add_system(logged_out.in_schedule(OnEnter(AuthState::LoggedOut)))
         // SCREENS
         // login
@@ -84,7 +95,7 @@ fn main() {
         .add_system(despawn_with::<MainMenuData>.in_schedule(OnExit(AppScreenState::MainMenu)))
         .add_system(play_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(nickname_submit_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(delete_data_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(delete_score_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(delete_account_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(logout_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(leaderboard_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
@@ -145,7 +156,7 @@ struct NicknameSubmitButton;
 struct NicknameInput;
 
 #[derive(Component)]
-struct DeleteDataButton;
+struct DeleteScoreButton;
 
 #[derive(Component)]
 struct DeleteAccountButton;
@@ -351,9 +362,14 @@ fn auth_url_listener(
     }
 }
 
-fn logged_in(mut next_state: ResMut<NextState<AppScreenState>>) {
+fn logged_in(mut _next_state: ResMut<NextState<AppScreenState>>) {
     println!("logged_in");
     // set app state to main menu
+    // _next_state.set(AppScreenState::MainMenu);
+}
+
+fn firestore_ready(mut next_state: ResMut<NextState<AppScreenState>>) {
+    println!("firestore ready!");
     next_state.set(AppScreenState::MainMenu);
 }
 
@@ -431,14 +447,14 @@ fn build_main_menu(
                 parent.spawn(TextBundle::from_section("log out", ui.typefaces.p.clone()));
             });
 
-        // DELETE DATA BUTTON
+        // DELETE SCORE BUTTON
         parent
             .spawn(ui.button.clone())
-            .insert(DeleteDataButton)
+            .insert(DeleteScoreButton)
             .insert(MainMenuData)
             .with_children(|parent| {
                 parent.spawn(TextBundle::from_section(
-                    "delete data",
+                    "delete score",
                     ui.typefaces.p.clone(),
                 ));
             });
@@ -503,14 +519,42 @@ fn leaderboard_button_system(
     }
 }
 
-fn delete_data_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<DeleteDataButton>)>,
+fn delete_score_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<DeleteScoreButton>)>,
     mut score: ResMut<Score>,
+    runtime: ResMut<TokioTasksRuntime>,
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    token_data: Option<Res<TokenData>>,
 ) {
-    for (interaction,) in &mut interaction_query {
-        if *interaction == Interaction::Clicked {
-            // TODO delete score from firestore
-            score.0 = 0;
+    // TODO early return, tooooo much right shift
+    if let Some(token_data) = token_data {
+        for (interaction,) in &mut interaction_query {
+            if *interaction == Interaction::Clicked {
+                score.0 = 0;
+
+                let mut client = client.clone();
+                let project_id = project_id.0.clone();
+                let uid = token_data.local_id.clone();
+                let mut data = HashMap::new();
+                data.insert(
+                    "score".to_string(),
+                    Value {
+                        value_type: Some(ValueType::IntegerValue(score.0 as i64)),
+                    },
+                );
+
+                runtime.spawn_background_task(|_ctx| async move {
+                    // TODO errors
+                    let _ = update_document(
+                        &mut client,
+                        &project_id,
+                        &format!("click/{}", uid),
+                        data.clone(),
+                    )
+                    .await;
+                });
+            }
         }
     }
 }
@@ -532,14 +576,30 @@ fn delete_account_button_system(
         (&Interaction,),
         (Changed<Interaction>, With<DeleteAccountButton>),
     >,
-    mut next_state: ResMut<NextState<AuthControllerState>>,
+    runtime: ResMut<TokioTasksRuntime>,
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    token_data: Option<Res<TokenData>>,
 ) {
-    for (interaction,) in &mut interaction_query {
-        if *interaction == Interaction::Clicked {
-            next_state.set(AuthControllerState::Delete)
+    // TODO right shift fix
+    if let Some(token_data) = token_data {
+        for (interaction,) in &mut interaction_query {
+            if *interaction == Interaction::Clicked {
+                let mut client = client.clone();
+                let project_id = project_id.0.clone();
+                let uid = token_data.local_id.clone();
 
-            // TODO delete data from firestore
-            // + set app state to logged out
+                runtime.spawn_background_task(|mut ctx| async move {
+                    let _ =
+                        delete_document(&mut client, &project_id, &format!("click/{}", uid)).await;
+
+                    ctx.run_on_main_thread(|ctx| {
+                        ctx.world
+                            .insert_resource(NextState(Some(AuthControllerState::Delete)));
+                    })
+                    .await;
+                });
+            }
         }
     }
 }
@@ -628,13 +688,37 @@ fn update_score(score: Res<Score>, mut q_score_text: Query<&mut Text, With<Score
 
 fn submit_score_button_system(
     mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<SubmitScoreButton>)>,
-    _score: Res<Score>,
+    score: Res<Score>,
     mut next_state: ResMut<NextState<AppScreenState>>,
+    runtime: ResMut<TokioTasksRuntime>,
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    token_data: Res<TokenData>,
 ) {
     for (interaction,) in &mut interaction_query {
         if *interaction == Interaction::Clicked {
-            println!("TODO: unimplemented function");
-            // TODO submit to firestore
+            let mut client = client.clone();
+            let project_id = project_id.0.clone();
+            let uid = token_data.local_id.clone();
+            let mut data = HashMap::new();
+            data.insert(
+                "score".to_string(),
+                Value {
+                    value_type: Some(ValueType::IntegerValue(score.0 as i64)),
+                },
+            );
+
+            runtime.spawn_background_task(|_ctx| async move {
+                // TODO errors
+                let _ = update_document(
+                    &mut client,
+                    &project_id,
+                    &format!("click/{}", uid),
+                    data.clone(),
+                )
+                .await;
+            });
+
             next_state.set(AppScreenState::Leaderboard);
         }
     }
