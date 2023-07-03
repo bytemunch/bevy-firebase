@@ -5,7 +5,7 @@
 
 mod util;
 
-use bevy::prelude::*;
+use bevy::{app::AppExit, prelude::*};
 use bevy_firebase::{log_in, log_out, AuthState, GotAuthUrl};
 use util::despawn_with;
 
@@ -63,6 +63,7 @@ fn main() {
         .add_startup_system(setup)
         // UTILS
         .add_system(button_color_system)
+        .add_system(exit_button_system)
         // LOGIN
         .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
         .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
@@ -80,6 +81,7 @@ fn main() {
         .add_system(build_main_menu.in_schedule(OnEnter(AppScreenState::MainMenu)))
         .add_system(despawn_with::<MainMenuData>.in_schedule(OnExit(AppScreenState::MainMenu)))
         .add_system(play_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(logout_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         // in game
         .add_system(build_in_game.in_schedule(OnEnter(AppScreenState::InGame)))
         .add_system(despawn_with::<InGameData>.in_schedule(OnExit(AppScreenState::InGame)))
@@ -111,6 +113,9 @@ struct UiBase;
 
 #[derive(Component)]
 struct LoginButton(String);
+
+#[derive(Component)]
+struct ExitButton;
 
 // MENU
 
@@ -233,6 +238,17 @@ fn button_color_system(
     }
 }
 
+fn exit_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<ExitButton>)>,
+    mut exit: EventWriter<AppExit>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            exit.send(AppExit)
+        }
+    }
+}
+
 // LOGIN
 
 fn build_login_screen(
@@ -252,6 +268,14 @@ fn build_login_screen(
             }),
             LogInScreenData,
         ));
+
+        parent
+            .spawn(ui.button.clone())
+            .insert(ExitButton)
+            .insert(LogInScreenData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section("quit", ui.typefaces.p.clone()));
+            });
     });
 
     // attempt auto login
@@ -290,18 +314,7 @@ fn auth_url_listener(
 
         commands.entity(ui_base).with_children(|parent| {
             parent
-                .spawn(ButtonBundle {
-                    style: Style {
-                        size: Size::new(Val::Px(300.0), Val::Px(65.0)),
-                        // horizontally center child text
-                        justify_content: JustifyContent::Center,
-                        // vertically center child text
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    background_color: NORMAL_BUTTON.into(),
-                    ..Default::default()
-                })
+                .spawn(ui.button.clone())
                 .insert(LoginButton(e.0.clone().into()))
                 .insert(LogInScreenData)
                 .with_children(|parent| {
@@ -392,6 +405,15 @@ fn build_main_menu(
                     "delete account",
                     ui.typefaces.p.clone(),
                 ));
+            });
+
+        // EXIT BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(ExitButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section("quit", ui.typefaces.p.clone()));
             });
     });
 }

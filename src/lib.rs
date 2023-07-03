@@ -436,13 +436,13 @@ impl Plugin for AuthPlugin {
 pub fn log_in(
     current_state: Res<State<AuthState>>,
     mut next_state: ResMut<NextState<AuthState>>,
-    token_data: Res<TokenData>,
+    token_data: Option<Res<TokenData>>,
 ) {
     if current_state.0 != AuthState::LoggedOut {
         return;
     }
 
-    if token_data.refresh_token.clone().is_empty() {
+    if token_data.is_none() || token_data.unwrap().refresh_token.clone().is_empty() {
         next_state.set(AuthState::LogIn);
     } else {
         next_state.set(AuthState::Refreshing);
@@ -482,6 +482,15 @@ fn init_login(
 ) {
     // sets up redirect server
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+    match listener.set_nonblocking(true) {
+        Ok(_) => {}
+        Err(err) => println!(
+            "Couldn't set nonblocking listener! This may cause an app freeze on exit. {:?}",
+            err
+        ),
+    };
+
     let port = listener.local_addr().unwrap().port();
 
     commands.insert_resource(RedirectPort(port));
