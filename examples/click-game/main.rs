@@ -6,7 +6,7 @@
 mod util;
 
 use bevy::{app::AppExit, prelude::*};
-use bevy_firebase::{log_in, log_out, AuthState, GotAuthUrl};
+use bevy_firebase_auth::{log_in, log_out, AuthState, GotAuthUrl};
 use util::despawn_with;
 
 // colours
@@ -48,11 +48,11 @@ fn main() {
     App::new()
         // PLUGINS
         .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase::AuthPlugin {
+        .add_plugin(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase::FirestorePlugin {
+        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())

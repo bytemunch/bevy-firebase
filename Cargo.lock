@@ -358,6 +358,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy-firebase"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy-firebase-auth",
+ "bevy-firebase-firestore",
+ "bevy-tokio-tasks",
+ "bevy_macro_utils",
+ "open",
+]
+
+[[package]]
+name = "bevy-firebase-auth"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy-tokio-tasks",
+ "reqwest",
+ "serde",
+ "url",
+]
+
+[[package]]
+name = "bevy-firebase-firestore"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy-firebase-auth",
+ "bevy-tokio-tasks",
+ "bevy_macro_utils",
+ "futures-lite",
+ "prost",
+ "prost-types",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "bevy-tokio-tasks"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,25 +599,6 @@ checksum = "c086ebdc1f5522787d63772943277cc74a279445fb65db4d58c2c5330654648e"
 dependencies = [
  "bevy_macro_utils",
  "encase_derive_impl",
-]
-
-[[package]]
-name = "bevy_firebase"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy-tokio-tasks",
- "bevy_macro_utils",
- "futures-lite",
- "open",
- "prost",
- "prost-types",
- "reqwest",
- "serde",
- "serde_json",
- "tonic",
- "tonic-build",
- "url",
 ]
 
 [[package]]

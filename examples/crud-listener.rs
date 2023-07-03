@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_firebase::{
+use bevy_firebase_auth::{log_in, log_out, GotAuthUrl, ProjectId, TokenData};
+use bevy_firebase_firestore::{
     deps::{ListenResponse, ResponseType, Status, Value, ValueType},
-    log_in, log_out, FirestoreState, ListenerEventBuilder, TokenData,
+    FirestoreState, ListenerEventBuilder,
     {
         add_listener, create_document, delete_document, read_document, update_document,
         BevyFirestoreClient,
     },
-    {GotAuthUrl, ProjectId},
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 
@@ -33,11 +33,11 @@ impl ListenerEventBuilder for MyListenerEvent {
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase::AuthPlugin {
+        .add_plugin(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase::FirestorePlugin {
+        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())

@@ -1,0 +1,13 @@
+[package]
+name = "bevy-firebase-auth"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = "1.0.164"
+bevy = "0.10.1"
+url = "2.4.0"
+bevy-tokio-tasks = "0.10.2"
+reqwest = {version = "0.11.18", features = ["json", "multipart"]}
