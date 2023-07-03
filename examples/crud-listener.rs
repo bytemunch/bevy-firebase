@@ -20,8 +20,8 @@ enum AppAuthState {
     LogOut,
 }
 
-pub struct MyListenerEvent {
-    pub msg: ListenResponse,
+struct MyListenerEvent {
+    msg: ListenResponse,
 }
 
 impl ListenerEventBuilder for MyListenerEvent {

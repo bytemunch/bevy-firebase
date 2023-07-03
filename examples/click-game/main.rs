@@ -81,17 +81,28 @@ fn main() {
         .add_system(build_main_menu.in_schedule(OnEnter(AppScreenState::MainMenu)))
         .add_system(despawn_with::<MainMenuData>.in_schedule(OnExit(AppScreenState::MainMenu)))
         .add_system(play_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(nickname_submit_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(delete_data_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(delete_account_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(logout_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(leaderboard_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         // in game
         .add_system(build_in_game.in_schedule(OnEnter(AppScreenState::InGame)))
         .add_system(despawn_with::<InGameData>.in_schedule(OnExit(AppScreenState::InGame)))
+        .add_system(update_score.in_set(OnUpdate(AppScreenState::InGame)))
+        .add_system(score_button_system.in_set(OnUpdate(AppScreenState::InGame)))
+        .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::InGame)))
+        .add_system(submit_score_button_system.in_set(OnUpdate(AppScreenState::InGame)))
         // leaderboard
         .add_system(build_leaderboard.in_schedule(OnEnter(AppScreenState::Leaderboard)))
         .add_system(
             despawn_with::<LeaderboardData>.in_schedule(OnExit(AppScreenState::Leaderboard)),
         )
+        .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::Leaderboard)))
         .run();
 }
+
+// UI
 
 #[derive(Resource, Clone)]
 struct UiSettings {
@@ -150,6 +161,13 @@ struct SubmitScoreButton;
 
 #[derive(Component)]
 struct ReturnToMenuButton;
+
+#[derive(Component)]
+struct ScoreText;
+
+// GAME LOGIC
+#[derive(Resource)]
+struct Score(usize);
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2dBundle::default());
@@ -213,6 +231,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 
     commands.insert_resource(UiSettings { typefaces, button });
+
+    // TODO load score from firestore
+    commands.insert_resource(Score(0));
 }
 
 // UTILS
@@ -260,8 +281,8 @@ fn build_login_screen(
     println!("build_login_screen");
     let ui_base = q_ui_base.single_mut();
 
-    // title
     commands.entity(ui_base).with_children(|parent| {
+        // TITLE
         parent.spawn((
             TextBundle::from_section("login", ui.typefaces.h2.clone()).with_style(Style {
                 ..Default::default()
@@ -296,6 +317,7 @@ fn login_button_system(
             // open URL
             let _ = open::that(login_url.0.clone());
             text.sections[0].value = "waiting for browser...".into();
+            // TODO display this text separately, allow users to close tab and try again
         }
     }
 }
@@ -386,6 +408,18 @@ fn build_main_menu(
                 parent.spawn(TextBundle::from_section("set name", ui.typefaces.p.clone()));
             });
 
+        // LEADERBOARD BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(LeaderboardButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "leaderboard",
+                    ui.typefaces.p.clone(),
+                ));
+            });
+
         // LOGOUT BUTTON
         parent
             .spawn(ui.button.clone())
@@ -393,6 +427,18 @@ fn build_main_menu(
             .insert(MainMenuData)
             .with_children(|parent| {
                 parent.spawn(TextBundle::from_section("log out", ui.typefaces.p.clone()));
+            });
+
+        // DELETE DATA BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(DeleteDataButton)
+            .insert(MainMenuData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "delete data",
+                    ui.typefaces.p.clone(),
+                ));
             });
 
         // DELETE ACCOUNT BUTTON
@@ -430,6 +476,43 @@ fn play_button_system(
     }
 }
 
+fn nickname_submit_button_system(
+    mut interaction_query: Query<
+        (&Interaction,),
+        (Changed<Interaction>, With<NicknameSubmitButton>),
+    >,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            // TODO
+            println!("TODO: unimplemented function")
+        }
+    }
+}
+
+fn leaderboard_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<LeaderboardButton>)>,
+    mut next_state: ResMut<NextState<AppScreenState>>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            next_state.set(AppScreenState::Leaderboard)
+        }
+    }
+}
+
+fn delete_data_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<DeleteDataButton>)>,
+    mut score: ResMut<Score>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            // TODO delete score from firestore
+            score.0 = 0;
+        }
+    }
+}
+
 fn logout_button_system(
     mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<LogoutButton>)>,
     mut next_state: ResMut<NextState<AppAuthState>>,
@@ -442,12 +525,30 @@ fn logout_button_system(
     }
 }
 
+fn delete_account_button_system(
+    mut interaction_query: Query<
+        (&Interaction,),
+        (Changed<Interaction>, With<DeleteAccountButton>),
+    >,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            // TODO
+            println!("TODO: unimplemented function")
+
+            // TODO delete from firestore
+            // + set app state to logged out
+        }
+    }
+}
+
 // IN GAME
 
 fn build_in_game(
     mut commands: Commands,
     mut q_ui_base: Query<Entity, With<UiBase>>,
     ui: Res<UiSettings>,
+    score: Res<Score>,
 ) {
     println!("build_in_game");
     let ui_base = q_ui_base.single_mut();
@@ -462,7 +563,8 @@ fn build_in_game(
 
         // SCORE
         parent.spawn((
-            TextBundle::from_section("score: 0", ui.typefaces.p.clone()),
+            TextBundle::from_section(format!("score: {}", score.0), ui.typefaces.p.clone()),
+            ScoreText,
             InGameData,
         ));
 
@@ -504,10 +606,78 @@ fn build_in_game(
     });
 }
 
-fn build_leaderboard(mut _commands: Commands) {
-    println!("build_leaderboard");
-    // title
-    // auto-updating leaderboard connected to firestore
+fn score_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<ScoreButton>)>,
+    mut score: ResMut<Score>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            score.0 += 1;
+        }
+    }
+}
 
-    // exit to menu button
+fn update_score(score: Res<Score>, mut q_score_text: Query<&mut Text, With<ScoreText>>) {
+    // TODO optimize, only set when score changed
+    let mut score_text = q_score_text.single_mut();
+
+    score_text.sections[0].value = format!("score: {}", score.0);
+}
+
+fn submit_score_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<SubmitScoreButton>)>,
+    _score: Res<Score>,
+    mut next_state: ResMut<NextState<AppScreenState>>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            println!("TODO: unimplemented function");
+            // TODO submit to firestore
+            next_state.set(AppScreenState::Leaderboard);
+        }
+    }
+}
+
+fn return_to_menu_button_system(
+    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<ReturnToMenuButton>)>,
+    mut next_state: ResMut<NextState<AppScreenState>>,
+) {
+    for (interaction,) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            next_state.set(AppScreenState::MainMenu)
+        }
+    }
+}
+
+fn build_leaderboard(
+    mut commands: Commands,
+    mut q_ui_base: Query<Entity, With<UiBase>>,
+    ui: Res<UiSettings>,
+) {
+    println!("build_leaderboard");
+    let ui_base = q_ui_base.single_mut();
+
+    commands.entity(ui_base).with_children(|parent| {
+        // TITLE
+        parent.spawn((
+            TextBundle::from_section("leaderboard", ui.typefaces.h2.clone()).with_style(Style {
+                ..Default::default()
+            }),
+            LeaderboardData,
+        ));
+
+        // TODO LEADERBOARD DISPLAY (scrollable UI w/ data from firestore)
+
+        // RETURN TO MENU BUTTON
+        parent
+            .spawn(ui.button.clone())
+            .insert(ReturnToMenuButton)
+            .insert(LeaderboardData)
+            .with_children(|parent| {
+                parent.spawn(TextBundle::from_section(
+                    "back to menu",
+                    ui.typefaces.p.clone(),
+                ));
+            });
+    });
 }
