@@ -13,8 +13,8 @@ use bevy_firebase_auth::{
 };
 use bevy_firebase_firestore::{
     delete_document,
-    deps::{Value, ValueType},
-    update_document, BevyFirestoreClient, FirestoreState,
+    deps::{value::ValueType, Document, DocumentMask, UpdateDocumentRequest, Value},
+    read_document, BevyFirestoreClient, FirestoreState,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 use util::despawn_with;
@@ -65,6 +65,7 @@ fn main() {
         })
         .add_plugin(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
+            // emulator_url: None,
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
         // STATES
@@ -99,6 +100,7 @@ fn main() {
         .add_system(delete_account_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(logout_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
         .add_system(leaderboard_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_system(update_welcome_text.in_set(OnUpdate(AppScreenState::MainMenu)))
         // in game
         .add_system(build_in_game.in_schedule(OnEnter(AppScreenState::InGame)))
         .add_system(despawn_with::<InGameData>.in_schedule(OnExit(AppScreenState::InGame)))
@@ -144,6 +146,9 @@ struct ExitButton;
 // MENU
 
 #[derive(Component)]
+struct WelcomeText;
+
+#[derive(Component)]
 struct LogoutButton;
 
 #[derive(Component)]
@@ -152,8 +157,10 @@ struct PlayButton;
 #[derive(Component)]
 struct NicknameSubmitButton;
 
-#[derive(Component)]
-struct NicknameInput;
+#[derive(Component, Clone)]
+struct NicknameInput {
+    value: String,
+}
 
 #[derive(Component)]
 struct DeleteScoreButton;
@@ -180,7 +187,10 @@ struct ScoreText;
 
 // GAME LOGIC
 #[derive(Resource)]
-struct Score(usize);
+struct Score(i64);
+
+#[derive(Resource)]
+struct Nickname(String);
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2dBundle::default());
@@ -245,19 +255,19 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.insert_resource(UiSettings { typefaces, button });
 
-    // TODO load score from firestore
+    // This is populated on firestore load
     commands.insert_resource(Score(0));
 }
 
 // UTILS
 
 fn button_color_system(
-    mut interaction_query: Query<
+    mut q_interaction: Query<
         (&Interaction, &mut BackgroundColor),
         (Changed<Interaction>, With<Button>),
     >,
 ) {
-    for (interaction, mut color) in &mut interaction_query {
+    for (interaction, mut color) in &mut q_interaction {
         match *interaction {
             Interaction::Clicked => {
                 *color = PRESSED_BUTTON.into();
@@ -273,10 +283,10 @@ fn button_color_system(
 }
 
 fn exit_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<ExitButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<ExitButton>)>,
     mut exit: EventWriter<AppExit>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             exit.send(AppExit)
         }
@@ -317,13 +327,13 @@ fn build_login_screen(
 }
 
 fn login_button_system(
-    mut interaction_query: Query<
+    mut q_interaction: Query<
         (&Interaction, &LoginButton, &Children),
         (Changed<Interaction>, With<LoginButton>),
     >,
     mut text_query: Query<&mut Text>,
 ) {
-    for (interaction, login_url, children) in &mut interaction_query {
+    for (interaction, login_url, children) in &mut q_interaction {
         let mut text = text_query.get_mut(children[0]).unwrap();
 
         if *interaction == Interaction::Clicked {
@@ -368,9 +378,93 @@ fn logged_in(mut _next_state: ResMut<NextState<AppScreenState>>) {
     // _next_state.set(AppScreenState::MainMenu);
 }
 
-fn firestore_ready(mut next_state: ResMut<NextState<AppScreenState>>) {
+fn firestore_ready(
+    runtime: ResMut<TokioTasksRuntime>,
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    token_data: Res<TokenData>,
+) {
     println!("firestore ready!");
-    next_state.set(AppScreenState::MainMenu);
+
+    let mut client = client.clone();
+    let project_id = project_id.0.clone();
+    let uid = token_data.local_id.clone();
+
+    runtime.spawn_background_task(|mut ctx| async move {
+        // Get name
+        let name_res = read_document(&mut client, &project_id, &format!("click/{}", uid)).await;
+
+        let name: String = match name_res {
+            Ok(res) => {
+                let doc = res.into_inner();
+                if let Some(val) = doc.fields.get("nickname") {
+                    if let Some(ValueType::StringValue(s)) = val.clone().value_type {
+                        s
+                    } else {
+                        "Player".into()
+                    }
+                } else {
+                    "Player".into()
+                }
+            }
+            Err(_) => "Player".into(),
+        };
+
+        // Set field in firestore
+        if name == "Player" {
+            let mut data = HashMap::new();
+            data.insert(
+                "nickname".to_string(),
+                Value {
+                    value_type: Some(ValueType::StringValue(name.clone())),
+                },
+            );
+
+            let _ = client
+                .0
+                .update_document(UpdateDocumentRequest {
+                    document: Some(Document {
+                        name: format!(
+                            "projects/{project_id}/databases/(default)/documents/click/{uid}"
+                        ),
+                        fields: data.clone(),
+                        ..Default::default()
+                    }),
+                    update_mask: Some(DocumentMask {
+                        field_paths: vec!["nickname".into()],
+                    }),
+                    ..Default::default()
+                })
+                .await;
+        }
+
+        // Get score
+        let score_res = read_document(&mut client, &project_id, &format!("click/{}", uid)).await;
+
+        let score_res = match score_res {
+            Ok(res) => {
+                let doc = res.into_inner();
+                if let Some(val) = doc.fields.get("score") {
+                    if let Some(ValueType::IntegerValue(s)) = val.clone().value_type {
+                        s
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
+        };
+
+        ctx.run_on_main_thread(move |ctx| {
+            ctx.world
+                .insert_resource(NextState(Some(AppScreenState::MainMenu)));
+            ctx.world.insert_resource(Nickname(name));
+            ctx.world.insert_resource(Score(score_res));
+        })
+        .await;
+    });
 }
 
 fn logged_out(mut next_state: ResMut<NextState<AppScreenState>>) {
@@ -385,6 +479,7 @@ fn build_main_menu(
     mut commands: Commands,
     mut q_ui_base: Query<Entity, With<UiBase>>,
     ui: Res<UiSettings>,
+    nickname: Res<Nickname>,
 ) {
     println!("build_main_menu");
     let ui_base = q_ui_base.single_mut();
@@ -398,11 +493,11 @@ fn build_main_menu(
         ));
 
         // WELCOME
-        let name = "NAME HERE";
-        // TODO grab name from firestore, if none found add placeholder
+        let name = nickname.0.clone();
 
         parent.spawn((
-            TextBundle::from_section(format!("welcome, {name}!"), ui.typefaces.p.clone()),
+            TextBundle::from_section(format!("Welcome, {name}!"), ui.typefaces.p.clone()),
+            WelcomeText,
             MainMenuData,
         ));
 
@@ -480,13 +575,27 @@ fn build_main_menu(
                 parent.spawn(TextBundle::from_section("quit", ui.typefaces.p.clone()));
             });
     });
+
+    commands.spawn_empty().insert(NicknameInput {
+        value: "BBBB".into(),
+    });
+}
+
+fn update_welcome_text(
+    nickname: Res<Nickname>,
+    mut q_welcome_text: Query<&mut Text, With<WelcomeText>>,
+) {
+    if nickname.is_changed() {
+        let mut text = q_welcome_text.single_mut();
+        text.sections[0].value = format!("welcome, {}", nickname.0);
+    }
 }
 
 fn play_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<PlayButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<PlayButton>)>,
     mut next_state: ResMut<NextState<AppScreenState>>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             // Go to in game state
             next_state.set(AppScreenState::InGame)
@@ -495,24 +604,60 @@ fn play_button_system(
 }
 
 fn nickname_submit_button_system(
-    mut interaction_query: Query<
-        (&Interaction,),
-        (Changed<Interaction>, With<NicknameSubmitButton>),
-    >,
+    q_interaction: Query<&Interaction, (Changed<Interaction>, With<NicknameSubmitButton>)>,
+    runtime: ResMut<TokioTasksRuntime>,
+    q_nickname_input: Query<&NicknameInput>,
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    token_data: Res<TokenData>,
+    mut nickname: ResMut<Nickname>,
 ) {
-    for (interaction,) in &mut interaction_query {
-        if *interaction == Interaction::Clicked {
-            // TODO
-            println!("TODO: unimplemented function")
+    if let Ok(nickname_input) = q_nickname_input.get_single() {
+        if let Ok(Interaction::Clicked) = q_interaction.get_single() {
+            nickname.0 = nickname_input.value.clone();
+
+            let mut client = client.clone();
+            let project_id = project_id.0.clone();
+            let uid = token_data.local_id.clone();
+            let nickname = nickname_input.clone();
+
+            runtime.spawn_background_task(|_ctx| async move {
+                let mut data = HashMap::new();
+                data.insert(
+                    "nickname".to_string(),
+                    Value {
+                        value_type: Some(ValueType::StringValue(nickname.value.clone())),
+                    },
+                );
+
+                let _ = client
+                    .0
+                    .update_document(UpdateDocumentRequest {
+                        document: Some(Document {
+                            name: format!(
+                                "projects/{project_id}/databases/(default)/documents/click/{uid}"
+                            ),
+                            fields: data.clone(),
+                            ..Default::default()
+                        }),
+                        update_mask: Some(DocumentMask {
+                            field_paths: vec!["nickname".into()],
+                        }),
+                        ..Default::default()
+                    })
+                    .await;
+            });
+
+            // TODO nickname update listener
         }
     }
 }
 
 fn leaderboard_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<LeaderboardButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<LeaderboardButton>)>,
     mut next_state: ResMut<NextState<AppScreenState>>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             next_state.set(AppScreenState::Leaderboard)
         }
@@ -520,7 +665,7 @@ fn leaderboard_button_system(
 }
 
 fn delete_score_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<DeleteScoreButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<DeleteScoreButton>)>,
     mut score: ResMut<Score>,
     runtime: ResMut<TokioTasksRuntime>,
     client: ResMut<BevyFirestoreClient>,
@@ -529,7 +674,7 @@ fn delete_score_button_system(
 ) {
     // TODO early return, tooooo much right shift
     if let Some(token_data) = token_data {
-        for (interaction,) in &mut interaction_query {
+        for (interaction,) in &mut q_interaction {
             if *interaction == Interaction::Clicked {
                 score.0 = 0;
 
@@ -540,19 +685,28 @@ fn delete_score_button_system(
                 data.insert(
                     "score".to_string(),
                     Value {
-                        value_type: Some(ValueType::IntegerValue(score.0 as i64)),
+                        value_type: Some(ValueType::IntegerValue(score.0)),
                     },
                 );
 
                 runtime.spawn_background_task(|_ctx| async move {
                     // TODO errors
-                    let _ = update_document(
-                        &mut client,
-                        &project_id,
-                        &format!("click/{}", uid),
-                        data.clone(),
-                    )
-                    .await;
+                    let _ = client
+                        .0
+                        .update_document(UpdateDocumentRequest {
+                            document: Some(Document {
+                                name: format!(
+                                "projects/{project_id}/databases/(default)/documents/click/{uid}"
+                            ),
+                                fields: data.clone(),
+                                ..Default::default()
+                            }),
+                            update_mask: Some(DocumentMask {
+                                field_paths: vec!["score".into()],
+                            }),
+                            ..Default::default()
+                        })
+                        .await;
                 });
             }
         }
@@ -560,10 +714,10 @@ fn delete_score_button_system(
 }
 
 fn logout_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<LogoutButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<LogoutButton>)>,
     mut next_state: ResMut<NextState<AuthControllerState>>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             // Go to in game state
             next_state.set(AuthControllerState::LogOut)
@@ -572,10 +726,7 @@ fn logout_button_system(
 }
 
 fn delete_account_button_system(
-    mut interaction_query: Query<
-        (&Interaction,),
-        (Changed<Interaction>, With<DeleteAccountButton>),
-    >,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<DeleteAccountButton>)>,
     runtime: ResMut<TokioTasksRuntime>,
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
@@ -583,7 +734,7 @@ fn delete_account_button_system(
 ) {
     // TODO right shift fix
     if let Some(token_data) = token_data {
-        for (interaction,) in &mut interaction_query {
+        for (interaction,) in &mut q_interaction {
             if *interaction == Interaction::Clicked {
                 let mut client = client.clone();
                 let project_id = project_id.0.clone();
@@ -669,10 +820,10 @@ fn build_in_game(
 }
 
 fn score_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<ScoreButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<ScoreButton>)>,
     mut score: ResMut<Score>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             score.0 += 1;
         }
@@ -680,14 +831,14 @@ fn score_button_system(
 }
 
 fn update_score(score: Res<Score>, mut q_score_text: Query<&mut Text, With<ScoreText>>) {
-    // TODO optimize, only set when score changed
-    let mut score_text = q_score_text.single_mut();
-
-    score_text.sections[0].value = format!("score: {}", score.0);
+    if score.is_changed() {
+        let mut score_text = q_score_text.single_mut();
+        score_text.sections[0].value = format!("score: {}", score.0);
+    }
 }
 
 fn submit_score_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<SubmitScoreButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<SubmitScoreButton>)>,
     score: Res<Score>,
     mut next_state: ResMut<NextState<AppScreenState>>,
     runtime: ResMut<TokioTasksRuntime>,
@@ -695,7 +846,7 @@ fn submit_score_button_system(
     project_id: Res<ProjectId>,
     token_data: Res<TokenData>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             let mut client = client.clone();
             let project_id = project_id.0.clone();
@@ -704,19 +855,28 @@ fn submit_score_button_system(
             data.insert(
                 "score".to_string(),
                 Value {
-                    value_type: Some(ValueType::IntegerValue(score.0 as i64)),
+                    value_type: Some(ValueType::IntegerValue(score.0)),
                 },
             );
 
             runtime.spawn_background_task(|_ctx| async move {
                 // TODO errors
-                let _ = update_document(
-                    &mut client,
-                    &project_id,
-                    &format!("click/{}", uid),
-                    data.clone(),
-                )
-                .await;
+                let _ = client
+                    .0
+                    .update_document(UpdateDocumentRequest {
+                        document: Some(Document {
+                            name: format!(
+                                "projects/{project_id}/databases/(default)/documents/click/{uid}"
+                            ),
+                            fields: data.clone(),
+                            ..Default::default()
+                        }),
+                        update_mask: Some(DocumentMask {
+                            field_paths: vec!["score".into()],
+                        }),
+                        ..Default::default()
+                    })
+                    .await;
             });
 
             next_state.set(AppScreenState::Leaderboard);
@@ -725,10 +885,10 @@ fn submit_score_button_system(
 }
 
 fn return_to_menu_button_system(
-    mut interaction_query: Query<(&Interaction,), (Changed<Interaction>, With<ReturnToMenuButton>)>,
+    mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<ReturnToMenuButton>)>,
     mut next_state: ResMut<NextState<AppScreenState>>,
 ) {
-    for (interaction,) in &mut interaction_query {
+    for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
             next_state.set(AppScreenState::MainMenu)
         }

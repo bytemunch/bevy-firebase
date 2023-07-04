@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_firebase_auth::{log_in, log_out, GotAuthUrl, ProjectId, TokenData};
 use bevy_firebase_firestore::{
-    deps::{ListenResponse, ResponseType, Status, Value, ValueType},
+    deps::{listen_response::ResponseType, value::ValueType, ListenResponse, Status, Value},
     FirestoreState, ListenerEventBuilder,
     {
         add_listener, create_document, delete_document, read_document, update_document,

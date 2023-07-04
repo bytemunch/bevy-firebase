@@ -5,11 +5,8 @@ mod googleapis;
 pub mod deps {
     use crate::googleapis;
 
+    pub use googleapis::google::firestore::v1::*;
     pub use tonic::Status;
-
-    pub use googleapis::google::firestore::v1::listen_response::ResponseType;
-    pub use googleapis::google::firestore::v1::ListenResponse;
-    pub use googleapis::google::firestore::v1::{value::ValueType, Value};
 }
 
 use std::fs::read_to_string;
@@ -40,7 +37,9 @@ use tonic::{
 
 // FIRESTORE
 #[derive(Resource, Clone)]
-pub struct BevyFirestoreClient(FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>);
+pub struct BevyFirestoreClient(
+    pub FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>,
+);
 
 #[derive(Resource, Clone)]
 struct EmulatorUrl(String);
@@ -55,7 +54,7 @@ pub enum FirestoreState {
 }
 
 #[derive(Clone)]
-struct FirebaseInterceptor {
+pub struct FirebaseInterceptor {
     bearer_token: MetadataValue<Ascii>,
     db: MetadataValue<Ascii>,
 }
@@ -244,6 +243,7 @@ pub async fn update_document(
                 fields: document_data,
                 ..Default::default()
             }),
+            // TODO update mask from document_data keys
             ..Default::default()
         })
         .await
