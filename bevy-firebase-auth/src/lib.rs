@@ -422,7 +422,7 @@ pub fn delete_account(
         let mut body = HashMap::new();
         body.insert("idToken", id_token);
 
-        let res = client
+        let _res = client
             .post(format!(
                 "https://identitytoolkit.googleapis.com/v1/accounts:delete?key={}",
                 api_key

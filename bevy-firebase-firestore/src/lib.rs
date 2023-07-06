@@ -90,7 +90,15 @@ impl Plugin for FirestorePlugin {
         app.add_state::<FirestoreState>()
             .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
             .add_system(init.in_schedule(OnEnter(FirestoreState::Init)))
-            .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)));
+            .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)))
+            // Events
+            .add_event::<CreateDocumentEvent>()
+            .add_event::<CreateDocumentResponseEvent>()
+            // Event Readers
+            .add_system(create_document_event_handler.in_set(OnUpdate(FirestoreState::Ready)))
+            .add_system(
+                create_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
+            );
     }
 }
 
@@ -205,7 +213,78 @@ pub fn add_listener<T>(
     });
 }
 
-pub async fn create_document(
+// TODO make all of these event driven
+
+pub struct CreateDocumentOptions {
+    pub document_id: String,
+    pub collection_id: String,
+    pub document_data: HashMap<String, Value>,
+}
+
+pub type DocumentResponse = Result<Document, Status>;
+
+pub struct CreateDocumentEvent(pub CreateDocumentOptions);
+
+pub struct CreateDocumentResponseEvent {
+    pub result: Result<Document, Status>,
+}
+
+pub fn create_document_event_handler(
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    mut er: EventReader<CreateDocumentEvent>,
+    runtime: ResMut<TokioTasksRuntime>,
+    // TODO custom response event (passed in create event?)
+) {
+    for e in er.iter() {
+        let mut client = client.0.clone();
+        let project_id = project_id.0.clone();
+
+        let collection_id = e.0.collection_id.clone();
+        let document_id = e.0.document_id.clone();
+        let fields = e.0.document_data.clone();
+
+        runtime.spawn_background_task(|mut ctx| async move {
+            let response: Result<Response<Document>, Status> = client
+                .create_document(CreateDocumentRequest {
+                    parent: format!("projects/{project_id}/databases/(default)/documents",),
+                    collection_id,
+                    document_id,
+                    document: Some(Document {
+                        fields,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await;
+
+            let result = match response {
+                Ok(result) => Ok(result.into_inner()),
+                Err(status) => Err(status),
+            };
+
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.send_event(CreateDocumentResponseEvent { result });
+            })
+            .await;
+        });
+    }
+}
+
+fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResponseEvent>) {
+    for e in er.iter() {
+        match e.result.clone() {
+            Ok(result) => {
+                println!("Document created: {:?}", result)
+            }
+            Err(status) => {
+                println!("ERROR: Document create failed: {}", status)
+            }
+        }
+    }
+}
+
+pub async fn old_create_document(
     client: &mut BevyFirestoreClient,
     project_id: &String,
     document_id: &String,

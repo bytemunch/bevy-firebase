@@ -4,11 +4,8 @@ use bevy::prelude::*;
 use bevy_firebase_auth::{log_in, log_out, GotAuthUrl, ProjectId, TokenData};
 use bevy_firebase_firestore::{
     deps::{listen_response::ResponseType, value::ValueType, ListenResponse, Status, Value},
-    FirestoreState, ListenerEventBuilder,
-    {
-        add_listener, create_document, delete_document, read_document, update_document,
-        BevyFirestoreClient,
-    },
+    CreateDocumentEvent, CreateDocumentOptions, FirestoreState, ListenerEventBuilder,
+    {add_listener, delete_document, read_document, update_document, BevyFirestoreClient},
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 
@@ -32,6 +29,7 @@ impl ListenerEventBuilder for MyListenerEvent {
 
 fn main() {
     App::new()
+        // Plugins
         .add_plugins(DefaultPlugins)
         .add_plugin(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
@@ -41,14 +39,17 @@ fn main() {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
         .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
-        .add_system(input)
-        .add_system(test_firestore_operations.in_schedule(OnEnter(FirestoreState::Ready)))
-        .add_system(test_listener_system)
-        .add_system(auth_url_listener)
+        // Auth
         .add_state::<AppAuthState>()
+        .add_system(auth_url_listener)
         .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
         .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        // Custom Listener event
         .add_event::<MyListenerEvent>()
+        .add_system(test_listener_system)
+        // Test fns
+        .add_system(input)
+        .add_system(test_firestore_operations.in_schedule(OnEnter(FirestoreState::Ready)))
         .run();
 }
 
@@ -117,6 +118,8 @@ fn test_firestore_operations(
     runtime: ResMut<TokioTasksRuntime>,
     project_id: Res<ProjectId>,
     user_info: Res<TokenData>,
+
+    mut document_creator: EventWriter<CreateDocumentEvent>,
 ) {
     let uid = user_info.local_id.clone();
     let project_id = project_id.0.clone();
@@ -140,17 +143,19 @@ fn test_firestore_operations(
         document_path.clone(),
     );
 
+    document_creator.send(CreateDocumentEvent(CreateDocumentOptions {
+        document_id: uid.clone(),
+        collection_id: "lobbies".into(),
+        document_data: data.clone(),
+    }));
+
+    // TODO await document creation, then continue
+    // TODO state machine for operations, modified in custom response handlers
+
     runtime.spawn_background_task(|mut ctx| async move {
         let document_path = &format!("lobbies/{}", uid);
 
-        let _ = create_document(
-            &mut client,
-            &project_id,
-            &uid,
-            &"lobbies".into(),
-            data.clone(),
-        )
-        .await;
+        ctx.sleep_updates(90).await;
 
         let read = read_document(&mut client, &project_id, document_path).await;
         println!("READ 1: {:?}\n", read);
