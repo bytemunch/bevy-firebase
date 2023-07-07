@@ -3,8 +3,10 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_firebase_auth::{log_in, log_out, GotAuthUrl, ProjectId, TokenData};
 use bevy_firebase_firestore::{
+    create_document_event_handler,
     deps::{listen_response::ResponseType, value::ValueType, ListenResponse, Status, Value},
-    CreateDocumentEvent, CreateDocumentOptions, FirestoreState, ListenerEventBuilder,
+    CreateDocumentEventBuilder, DocResEventBuilder, DocumentResponse, FirestoreState,
+    ListenerEventBuilder,
     {add_listener, delete_document, read_document, update_document, BevyFirestoreClient},
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
@@ -49,7 +51,18 @@ fn main() {
         .add_system(test_listener_system)
         // Test fns
         .add_system(input)
+        // NEW EVENT BITS
+        .add_event::<CustomCreateDocumentResponseEvent>()
+        .add_event::<CustomCreateDocumentEvent>()
         .add_system(test_firestore_operations.in_schedule(OnEnter(FirestoreState::Ready)))
+        .add_system(
+            create_document_event_handler::<
+                CustomCreateDocumentEvent,
+                CustomCreateDocumentResponseEvent,
+            >
+                .in_set(OnUpdate(FirestoreState::Ready)),
+        )
+        .add_system(custom_create_document_response_event_handler)
         .run();
 }
 
@@ -113,13 +126,63 @@ fn test_listener_system(mut er: EventReader<MyListenerEvent>) {
     }
 }
 
+// TODO new example for custom events
+
+#[derive(Clone)]
+struct CustomCreateDocumentResponseEvent {
+    result: DocumentResponse,
+}
+
+impl DocResEventBuilder for CustomCreateDocumentResponseEvent {
+    fn new(result: DocumentResponse) -> Self {
+        CustomCreateDocumentResponseEvent { result }
+    }
+}
+
+#[derive(Clone)]
+struct CustomCreateDocumentEvent {
+    pub document_id: String,
+    pub collection_id: String,
+    pub document_data: HashMap<String, Value>,
+}
+
+impl CreateDocumentEventBuilder for CustomCreateDocumentEvent {
+    fn new(options: CustomCreateDocumentEvent) -> Self {
+        options
+    }
+    fn collection_id(&self) -> String {
+        self.collection_id.clone()
+    }
+    fn document_data(&self) -> HashMap<String, Value> {
+        self.document_data.clone()
+    }
+    fn document_id(&self) -> String {
+        self.document_id.clone()
+    }
+}
+
+fn custom_create_document_response_event_handler(
+    mut er: EventReader<CustomCreateDocumentResponseEvent>,
+) {
+    for e in er.iter() {
+        match e.result.clone() {
+            Ok(result) => {
+                println!("CUSTOM: Document created: {:?}", result)
+            }
+            Err(status) => {
+                println!("CUSTOM: ERROR: Document create failed: {}", status)
+            }
+        }
+    }
+}
+
 fn test_firestore_operations(
     client: ResMut<BevyFirestoreClient>,
     runtime: ResMut<TokioTasksRuntime>,
     project_id: Res<ProjectId>,
     user_info: Res<TokenData>,
 
-    mut document_creator: EventWriter<CreateDocumentEvent>,
+    mut document_creator: EventWriter<CustomCreateDocumentEvent>,
 ) {
     let uid = user_info.local_id.clone();
     let project_id = project_id.0.clone();
@@ -143,11 +206,11 @@ fn test_firestore_operations(
         document_path.clone(),
     );
 
-    document_creator.send(CreateDocumentEvent(CreateDocumentOptions {
+    document_creator.send(CustomCreateDocumentEvent {
         document_id: uid.clone(),
         collection_id: "lobbies".into(),
         document_data: data.clone(),
-    }));
+    });
 
     // TODO await document creation, then continue
     // TODO state machine for operations, modified in custom response handlers
