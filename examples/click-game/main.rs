@@ -609,9 +609,15 @@ fn nickname_submit_button_system(
     q_nickname_input: Query<&NicknameInput>,
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
-    token_data: Res<TokenData>,
+    token_data: Option<Res<TokenData>>,
     mut nickname: ResMut<Nickname>,
 ) {
+    if token_data.is_none() {
+        return;
+    }
+
+    let token_data = token_data.unwrap();
+
     if let Ok(nickname_input) = q_nickname_input.get_single() {
         if let Ok(Interaction::Clicked) = q_interaction.get_single() {
             nickname.0 = nickname_input.value.clone();
