@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_firebase_auth::{log_in, log_out, GotAuthUrl, ProjectId, TokenData};
 use bevy_firebase_firestore::{
-    create_document_event_handler,
+    add_listener, create_document_event_handler,
     deps::{listen_response::ResponseType, value::ValueType, ListenResponse, Status, Value},
-    CreateDocumentEventBuilder, DocResEventBuilder, DocumentResponse, FirestoreState,
+    CreateDocumentEventBuilder, CreateDocumentResponseEventBuilder, DocumentResult, FirestoreState,
     ListenerEventBuilder,
-    {add_listener, delete_document, read_document, update_document, BevyFirestoreClient},
+    {async_delete_document, async_read_document, async_update_document, BevyFirestoreClient},
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 
@@ -19,13 +19,13 @@ enum AppAuthState {
     LogOut,
 }
 
-struct MyListenerEvent {
+struct CustomListenerEvent {
     msg: ListenResponse,
 }
 
-impl ListenerEventBuilder for MyListenerEvent {
+impl ListenerEventBuilder for CustomListenerEvent {
     fn new(msg: ListenResponse) -> Self {
-        MyListenerEvent { msg }
+        CustomListenerEvent { msg }
     }
 }
 
@@ -47,7 +47,7 @@ fn main() {
         .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
         .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
         // Custom Listener event
-        .add_event::<MyListenerEvent>()
+        .add_event::<CustomListenerEvent>()
         .add_system(test_listener_system)
         // Test fns
         .add_system(input)
@@ -82,7 +82,7 @@ fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
     }
 }
 
-fn test_listener_system(mut er: EventReader<MyListenerEvent>) {
+fn test_listener_system(mut er: EventReader<CustomListenerEvent>) {
     for ev in er.iter() {
         match ev.msg.response_type.as_ref().unwrap() {
             ResponseType::TargetChange(response) => {
@@ -130,11 +130,11 @@ fn test_listener_system(mut er: EventReader<MyListenerEvent>) {
 
 #[derive(Clone)]
 struct CustomCreateDocumentResponseEvent {
-    result: DocumentResponse,
+    result: DocumentResult,
 }
 
-impl DocResEventBuilder for CustomCreateDocumentResponseEvent {
-    fn new(result: DocumentResponse) -> Self {
+impl CreateDocumentResponseEventBuilder for CustomCreateDocumentResponseEvent {
+    fn new(result: DocumentResult) -> Self {
         CustomCreateDocumentResponseEvent { result }
     }
 }
@@ -186,7 +186,7 @@ fn test_firestore_operations(
 ) {
     let uid = user_info.local_id.clone();
     let project_id = project_id.0.clone();
-    let mut client = client.clone();
+    let mut client = client.0.clone();
 
     let mut data = HashMap::new();
 
@@ -197,14 +197,9 @@ fn test_firestore_operations(
         },
     );
 
-    let document_path = &format!("lobbies/{}", uid);
+    let document_path = format!("lobbies/{}", uid);
 
-    add_listener::<MyListenerEvent>(
-        &runtime,
-        &mut client,
-        project_id.clone(),
-        document_path.clone(),
-    );
+    add_listener::<CustomListenerEvent>(&runtime, &mut client, project_id.clone(), document_path);
 
     document_creator.send(CustomCreateDocumentEvent {
         document_id: uid.clone(),
@@ -220,7 +215,7 @@ fn test_firestore_operations(
 
         ctx.sleep_updates(90).await;
 
-        let read = read_document(&mut client, &project_id, document_path).await;
+        let read = async_read_document(&mut client, &project_id, document_path).await;
         println!("READ 1: {:?}\n", read);
 
         data.insert(
@@ -239,14 +234,14 @@ fn test_firestore_operations(
 
         ctx.sleep_updates(30).await;
 
-        let _ = update_document(&mut client, &project_id, document_path, data.clone()).await;
+        let _ = async_update_document(&mut client, &project_id, document_path, data.clone()).await;
 
-        let read = read_document(&mut client, &project_id, document_path).await;
+        let read = async_read_document(&mut client, &project_id, document_path).await;
         println!("READ 2: {:?}\n", read);
 
-        let _ = delete_document(&mut client, &project_id, document_path).await;
+        let _ = async_delete_document(&mut client, &project_id, document_path).await;
 
-        let read = read_document(&mut client, &project_id, document_path).await;
+        let read = async_read_document(&mut client, &project_id, document_path).await;
         println!("READ 3: {:?}\n", read);
 
         Ok::<(), Status>(())

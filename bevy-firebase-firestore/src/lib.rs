@@ -15,9 +15,10 @@ use std::{collections::HashMap, path::PathBuf};
 use crate::googleapis::google::firestore::v1::{
     firestore_client::FirestoreClient,
     listen_request::TargetChange,
+    listen_response::ResponseType,
     target::{DocumentsTarget, TargetType},
-    CreateDocumentRequest, DeleteDocumentRequest, Document, GetDocumentRequest, ListenRequest,
-    ListenResponse, Target, UpdateDocumentRequest, Value,
+    CreateDocumentRequest, DeleteDocumentRequest, Document, DocumentMask, GetDocumentRequest,
+    ListenRequest, ListenResponse, Target, UpdateDocumentRequest, Value,
 };
 
 use bevy::prelude::*;
@@ -91,6 +92,18 @@ impl Plugin for FirestorePlugin {
             .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
             .add_system(init.in_schedule(OnEnter(FirestoreState::Init)))
             .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)))
+            // LISTENER
+            .add_event::<CreateListenerEvent>()
+            .add_event::<ListenerEvent>()
+            .add_system(
+                create_listener_event_handler::<ListenerEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            .add_system(
+                listener_response_event_handler::<ListenerEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            // CREATE
             // Events
             .add_event::<CreateDocumentEvent>()
             .add_event::<CreateDocumentResponseEvent>()
@@ -100,6 +113,42 @@ impl Plugin for FirestorePlugin {
             )
             .add_system(
                 create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            // UPDATE
+            // Events
+            .add_event::<UpdateDocumentEvent>()
+            .add_event::<UpdateDocumentResponseEvent>()
+            // Event Readers
+            .add_system(
+                update_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            .add_system(
+                update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            // READ
+            // Events
+            .add_event::<ReadDocumentEvent>()
+            .add_event::<ReadDocumentResponseEvent>()
+            // Event Readers
+            .add_system(
+                read_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            .add_system(
+                read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            // DELETE
+            // Events
+            .add_event::<DeleteDocumentEvent>()
+            .add_event::<DeleteDocumentResponseEvent>()
+            // Event Readers
+            .add_system(
+                delete_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            .add_system(
+                delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             );
     }
@@ -112,6 +161,8 @@ fn logged_in(mut next_state: ResMut<NextState<FirestoreState>>) {
 fn init(mut next_state: ResMut<NextState<FirestoreState>>) {
     next_state.set(FirestoreState::CreateClient);
 }
+
+// CLIENT
 
 fn create_client(
     runtime: ResMut<TokioTasksRuntime>,
@@ -171,19 +222,40 @@ fn create_client(
     });
 }
 
+// LISTENER
+
 pub trait ListenerEventBuilder {
     fn new(msg: ListenResponse) -> Self;
+    fn msg(&self) -> ListenResponse {
+        ListenResponse {
+            ..Default::default()
+        }
+    }
+}
+
+struct ListenerEvent {
+    msg: ListenResponse,
+}
+
+impl ListenerEventBuilder for ListenerEvent {
+    fn new(msg: ListenResponse) -> Self {
+        ListenerEvent { msg }
+    }
+    fn msg(&self) -> ListenResponse {
+        self.msg.clone()
+    }
 }
 
 pub fn add_listener<T>(
     runtime: &ResMut<TokioTasksRuntime>,
-    client: &mut BevyFirestoreClient,
+    client: &mut Client,
     project_id: String,
     target: String,
 ) where
     T: ListenerEventBuilder + std::marker::Send + std::marker::Sync + 'static,
 {
-    let mut client = client.0.clone();
+    let mut client = client.clone();
+
     runtime.spawn_background_task(|mut ctx| async move {
         let db = format!("projects/{project_id}/databases/(default)");
         let req = ListenRequest {
@@ -216,9 +288,153 @@ pub fn add_listener<T>(
     });
 }
 
-// TODO make all of these event driven
-pub type DocumentResponse = Result<Document, Status>;
+pub struct CreateListenerEvent {
+    target: String,
+}
 
+pub fn create_listener_event_handler<T>(
+    mut er: EventReader<CreateListenerEvent>,
+    runtime: ResMut<TokioTasksRuntime>,
+    mut client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+) where
+    T: ListenerEventBuilder + Send + Sync + 'static,
+{
+    for e in er.iter() {
+        add_listener::<T>(
+            &runtime,
+            &mut client.0,
+            project_id.0.clone(),
+            e.target.clone(),
+        )
+    }
+}
+
+fn listener_response_event_handler<T>(mut er: EventReader<T>)
+where
+    T: Send + Sync + 'static + ListenerEventBuilder,
+{
+    for ev in er.iter() {
+        match ev.msg().response_type.as_ref().unwrap() {
+            ResponseType::TargetChange(response) => {
+                let change_type = response.target_change_type;
+
+                // TODO match on googleapis::google::firestore::v1::target_change::TargetChangeType
+                match change_type {
+                    0 => {
+                        // no change
+                    }
+                    1 => {
+                        // target added
+                    }
+                    2 => {
+                        // target removed
+                    }
+                    3 => {
+                        // target current (research needed lol)
+                    }
+                    4 => {
+                        // reset (also no idea)
+                    }
+                    _ => {
+                        // unknown response
+                    }
+                }
+            }
+            ResponseType::DocumentChange(response) => {
+                println!("Document Changed: {:?}", response.document.clone().unwrap());
+            }
+            ResponseType::DocumentDelete(response) => {
+                println!("Document Deleted: {:?}", response.document.clone());
+            }
+            ResponseType::DocumentRemove(response) => {
+                println!("Document Removed: {:?}", response.document.clone());
+            }
+            ResponseType::Filter(response) => {
+                println!("Filter: {:?}", response);
+            }
+        }
+    }
+}
+
+// CRUD
+
+pub async fn async_create_document(
+    client: &mut Client,
+    project_id: &String,
+    document_id: &String,
+    collection_id: &String,
+    fields: HashMap<String, Value>,
+) -> Result<Response<Document>, Status> {
+    client
+        .create_document(CreateDocumentRequest {
+            parent: format!("projects/{project_id}/databases/(default)/documents"),
+            collection_id: collection_id.into(),
+            document_id: document_id.into(),
+            document: Some(Document {
+                fields,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+}
+
+pub async fn async_update_document(
+    client: &mut Client,
+    project_id: &String,
+    document_path: &String,
+    fields: HashMap<String, Value>,
+) -> Result<Response<Document>, Status> {
+    let field_paths = Vec::from_iter(fields.clone().keys().cloned());
+
+    client
+        .update_document(UpdateDocumentRequest {
+            document: Some(Document {
+                name: format!(
+                    "projects/{project_id}/databases/(default)/documents/{document_path}"
+                ),
+                fields,
+                ..Default::default()
+            }),
+            update_mask: Some(DocumentMask { field_paths }),
+            ..Default::default()
+        })
+        .await
+}
+
+pub async fn async_read_document(
+    client: &mut Client,
+    project_id: &String,
+    document_path: &String,
+) -> Result<Response<Document>, Status> {
+    client
+        .get_document(GetDocumentRequest {
+            name: format!("projects/{project_id}/databases/(default)/documents/{document_path}"),
+            ..Default::default()
+        })
+        .await
+}
+
+pub async fn async_delete_document(
+    client: &mut Client,
+    project_id: &String,
+    document_path: &String,
+) -> Result<Response<()>, Status> {
+    client
+        .delete_document(DeleteDocumentRequest {
+            name: format!("projects/{project_id}/databases/(default)/documents/{document_path}"),
+            ..Default::default()
+        })
+        .await
+}
+
+pub type DocumentResult = Result<Document, Status>;
+pub type Client = FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>;
+
+// CREATE
+
+// TODO make all of these event driven
 pub trait CreateDocumentEventBuilder {
     fn new(options: Self) -> Self;
     fn document_id(&self) -> String {
@@ -255,17 +471,17 @@ impl CreateDocumentEventBuilder for CreateDocumentEvent {
     }
 }
 
+pub trait CreateDocumentResponseEventBuilder {
+    fn new(result: DocumentResult) -> Self;
+}
+
 #[derive(Clone)]
 pub struct CreateDocumentResponseEvent {
-    pub result: Result<Document, Status>,
+    pub result: DocumentResult,
 }
 
-pub trait DocResEventBuilder {
-    fn new(result: DocumentResponse) -> Self;
-}
-
-impl DocResEventBuilder for CreateDocumentResponseEvent {
-    fn new(result: DocumentResponse) -> Self {
+impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
+    fn new(result: DocumentResult) -> Self {
         CreateDocumentResponseEvent { result }
     }
 }
@@ -275,32 +491,27 @@ pub fn create_document_event_handler<T, R>(
     project_id: Res<ProjectId>,
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
-    // TODO custom response event (passed in create event?)
 ) where
-    R: DocResEventBuilder + Send + Sync + 'static + Clone,
     T: CreateDocumentEventBuilder + Send + Sync + 'static + Clone,
+    R: CreateDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
 {
     for e in er.iter() {
         let mut client = client.0.clone();
         let project_id = project_id.0.clone();
 
-        let collection_id = e.clone().collection_id().clone();
-        let document_id = e.clone().document_id().clone();
-        let fields = e.clone().document_data().clone();
+        let collection_id = e.collection_id();
+        let document_id = e.document_id();
+        let fields = e.document_data();
 
         runtime.spawn_background_task(|mut ctx| async move {
-            let response: Result<Response<Document>, Status> = client
-                .create_document(CreateDocumentRequest {
-                    parent: format!("projects/{project_id}/databases/(default)/documents",),
-                    collection_id,
-                    document_id,
-                    document: Some(Document {
-                        fields,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                })
-                .await;
+            let response = async_create_document(
+                &mut client,
+                &project_id,
+                &document_id,
+                &collection_id,
+                fields,
+            )
+            .await;
 
             let result = match response {
                 Ok(result) => Ok(result.into_inner()),
@@ -328,74 +539,263 @@ fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResp
     }
 }
 
-pub async fn old_create_document(
-    client: &mut BevyFirestoreClient,
-    project_id: &String,
-    document_id: &String,
-    collection_id: &String,
-    document_data: HashMap<String, Value>,
-) -> Result<Response<Document>, Status> {
-    client
-        .0
-        .create_document(CreateDocumentRequest {
-            parent: format!("projects/{project_id}/databases/(default)/documents"),
-            collection_id: collection_id.into(),
-            document_id: document_id.into(),
-            document: Some(Document {
-                fields: document_data,
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-        .await
+// UPDATE
+pub trait UpdateDocumentEventBuilder {
+    fn new(event: Self) -> Self;
+    fn document_path(&self) -> String {
+        "".into()
+    }
+    fn document_data(&self) -> HashMap<String, Value> {
+        let h: HashMap<String, Value> = HashMap::new();
+        h
+    }
 }
 
-pub async fn update_document(
-    client: &mut BevyFirestoreClient,
-    project_id: &String,
-    document_path: &String,
-    document_data: HashMap<String, Value>,
-) -> Result<Response<Document>, Status> {
-    client
-        .0
-        .update_document(UpdateDocumentRequest {
-            document: Some(Document {
-                name: format!(
-                    "projects/{project_id}/databases/(default)/documents/{document_path}"
-                ),
-                fields: document_data,
-                ..Default::default()
-            }),
-            // TODO update mask from document_data keys
-            ..Default::default()
-        })
-        .await
+#[derive(Clone)]
+pub struct UpdateDocumentEvent {
+    pub document_path: String,
+    pub document_data: HashMap<String, Value>,
 }
 
-pub async fn read_document(
-    client: &mut BevyFirestoreClient,
-    project_id: &String,
-    document_path: &String,
-) -> Result<Response<Document>, Status> {
-    client
-        .0
-        .get_document(GetDocumentRequest {
-            name: format!("projects/{project_id}/databases/(default)/documents/{document_path}"),
-            ..Default::default()
-        })
-        .await
+impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
+    fn new(event: UpdateDocumentEvent) -> Self {
+        event
+    }
+    fn document_data(&self) -> HashMap<String, Value> {
+        self.document_data.clone()
+    }
+    fn document_path(&self) -> String {
+        self.document_path.clone()
+    }
 }
 
-pub async fn delete_document(
-    client: &mut BevyFirestoreClient,
-    project_id: &String,
-    document_path: &String,
-) -> Result<Response<()>, Status> {
-    client
-        .0
-        .delete_document(DeleteDocumentRequest {
-            name: format!("projects/{project_id}/databases/(default)/documents/{document_path}"),
-            ..Default::default()
-        })
-        .await
+pub trait UpdateDocumentResponseEventBuilder {
+    fn new(result: DocumentResult) -> Self;
+}
+
+#[derive(Clone)]
+pub struct UpdateDocumentResponseEvent {
+    pub result: DocumentResult,
+}
+
+impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
+    fn new(result: DocumentResult) -> Self {
+        UpdateDocumentResponseEvent { result }
+    }
+}
+
+fn update_document_event_handler<T, R>(
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    mut er: EventReader<T>,
+    runtime: ResMut<TokioTasksRuntime>,
+) where
+    T: UpdateDocumentEventBuilder + Send + Sync + 'static + Clone,
+    R: UpdateDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+{
+    for e in er.iter() {
+        let mut client = client.0.clone();
+        let project_id = project_id.0.clone();
+
+        let document_path = e.document_path();
+        let fields = e.document_data();
+
+        runtime.spawn_background_task(|mut ctx| async move {
+            let response =
+                async_update_document(&mut client, &project_id, &document_path, fields).await;
+
+            // TODO DRY
+
+            let result = match response {
+                Ok(result) => Ok(result.into_inner()),
+                Err(status) => Err(status),
+            };
+
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.send_event(R::new(result));
+            })
+            .await;
+        });
+    }
+}
+
+fn update_document_response_event_handler(mut er: EventReader<UpdateDocumentResponseEvent>) {
+    for e in er.iter() {
+        match e.result.clone() {
+            Ok(result) => {
+                println!("Document updated: {:?}", result)
+            }
+            Err(status) => {
+                println!("ERROR: Document update failed: {}", status)
+            }
+        }
+    }
+}
+
+// READ
+
+pub trait ReadDocumentEventBuilder {
+    fn new(event: Self) -> Self;
+    fn document_path(&self) -> String {
+        "".into()
+    }
+}
+
+#[derive(Clone)]
+pub struct ReadDocumentEvent {
+    pub document_path: String,
+}
+
+impl ReadDocumentEventBuilder for ReadDocumentEvent {
+    fn new(event: ReadDocumentEvent) -> Self {
+        event
+    }
+    fn document_path(&self) -> String {
+        self.document_path.clone()
+    }
+}
+
+pub trait ReadDocumentResponseEventBuilder {
+    fn new(result: DocumentResult) -> Self;
+}
+
+#[derive(Clone)]
+pub struct ReadDocumentResponseEvent {
+    pub result: DocumentResult,
+}
+
+impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
+    fn new(result: DocumentResult) -> Self {
+        ReadDocumentResponseEvent { result }
+    }
+}
+
+fn read_document_event_handler<T, R>(
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    mut er: EventReader<T>,
+    runtime: ResMut<TokioTasksRuntime>,
+) where
+    T: ReadDocumentEventBuilder + Send + Sync + 'static + Clone,
+    R: ReadDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+{
+    for e in er.iter() {
+        let mut client = client.0.clone();
+        let project_id = project_id.0.clone();
+
+        let document_path = e.document_path();
+
+        runtime.spawn_background_task(|mut ctx| async move {
+            let response = async_read_document(&mut client, &project_id, &document_path).await;
+
+            // TODO DRY
+
+            let result = match response {
+                Ok(result) => Ok(result.into_inner()),
+                Err(status) => Err(status),
+            };
+
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.send_event(R::new(result));
+            })
+            .await;
+        });
+    }
+}
+
+fn read_document_response_event_handler(mut er: EventReader<ReadDocumentResponseEvent>) {
+    for e in er.iter() {
+        match e.result.clone() {
+            Ok(result) => {
+                println!("Document read: {:?}", result)
+            }
+            Err(status) => {
+                println!("ERROR: Document read failed: {}", status)
+            }
+        }
+    }
+}
+
+// DELETE
+
+pub trait DeleteDocumentEventBuilder {
+    fn new(event: Self) -> Self;
+    fn document_path(&self) -> String {
+        "".into()
+    }
+}
+
+#[derive(Clone)]
+pub struct DeleteDocumentEvent {
+    pub document_path: String,
+}
+
+impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
+    fn new(event: DeleteDocumentEvent) -> Self {
+        event
+    }
+    fn document_path(&self) -> String {
+        self.document_path.clone()
+    }
+}
+
+pub trait DeleteDocumentResponseEventBuilder {
+    fn new(result: Result<(), Status>) -> Self;
+}
+
+#[derive(Clone)]
+pub struct DeleteDocumentResponseEvent {
+    pub result: Result<(), Status>,
+}
+
+impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
+    fn new(result: Result<(), Status>) -> Self {
+        DeleteDocumentResponseEvent { result }
+    }
+}
+
+fn delete_document_event_handler<T, R>(
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+    mut er: EventReader<T>,
+    runtime: ResMut<TokioTasksRuntime>,
+) where
+    T: DeleteDocumentEventBuilder + Send + Sync + 'static + Clone,
+    R: DeleteDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+{
+    for e in er.iter() {
+        let mut client = client.0.clone();
+        let project_id = project_id.0.clone();
+
+        let document_path = e.document_path();
+
+        runtime.spawn_background_task(|mut ctx| async move {
+            let response = async_delete_document(&mut client, &project_id, &document_path).await;
+
+            // TODO DRY
+
+            let result = match response {
+                Ok(_) => Ok(()),
+                Err(status) => Err(status),
+            };
+
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.send_event(R::new(result));
+            })
+            .await;
+        });
+    }
+}
+
+fn delete_document_response_event_handler(mut er: EventReader<DeleteDocumentResponseEvent>) {
+    for e in er.iter() {
+        match e.result.clone() {
+            Ok(result) => {
+                println!("Document deleted: {:?}", result)
+            }
+            Err(status) => {
+                println!("ERROR: Document delete failed: {}", status)
+            }
+        }
+    }
 }

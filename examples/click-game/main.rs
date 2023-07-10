@@ -12,9 +12,9 @@ use bevy_firebase_auth::{
     delete_account, log_in, log_out, AuthState, GotAuthUrl, ProjectId, TokenData,
 };
 use bevy_firebase_firestore::{
-    delete_document,
+    async_delete_document, async_read_document,
     deps::{value::ValueType, Document, DocumentMask, UpdateDocumentRequest, Value},
-    read_document, BevyFirestoreClient, FirestoreState,
+    BevyFirestoreClient, FirestoreState, UpdateDocumentEvent,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 use util::despawn_with;
@@ -386,13 +386,14 @@ fn firestore_ready(
 ) {
     println!("firestore ready!");
 
-    let mut client = client.clone();
+    let mut client = client.0.clone();
     let project_id = project_id.0.clone();
     let uid = token_data.local_id.clone();
 
     runtime.spawn_background_task(|mut ctx| async move {
         // Get name
-        let name_res = read_document(&mut client, &project_id, &format!("click/{}", uid)).await;
+        let name_res =
+            async_read_document(&mut client, &project_id, &format!("click/{}", uid)).await;
 
         let name: String = match name_res {
             Ok(res) => {
@@ -421,7 +422,6 @@ fn firestore_ready(
             );
 
             let _ = client
-                .0
                 .update_document(UpdateDocumentRequest {
                     document: Some(Document {
                         name: format!(
@@ -439,7 +439,8 @@ fn firestore_ready(
         }
 
         // Get score
-        let score_res = read_document(&mut client, &project_id, &format!("click/{}", uid)).await;
+        let score_res =
+            async_read_document(&mut client, &project_id, &format!("click/{}", uid)).await;
 
         let score_res = match score_res {
             Ok(res) => {
@@ -577,7 +578,7 @@ fn build_main_menu(
     });
 
     commands.spawn_empty().insert(NicknameInput {
-        value: "BBBB".into(),
+        value: "NewName".into(),
     });
 }
 
@@ -605,12 +606,10 @@ fn play_button_system(
 
 fn nickname_submit_button_system(
     q_interaction: Query<&Interaction, (Changed<Interaction>, With<NicknameSubmitButton>)>,
-    runtime: ResMut<TokioTasksRuntime>,
     q_nickname_input: Query<&NicknameInput>,
-    client: ResMut<BevyFirestoreClient>,
-    project_id: Res<ProjectId>,
     token_data: Option<Res<TokenData>>,
     mut nickname: ResMut<Nickname>,
+    mut ew: EventWriter<UpdateDocumentEvent>,
 ) {
     if token_data.is_none() {
         return;
@@ -622,36 +621,22 @@ fn nickname_submit_button_system(
         if let Ok(Interaction::Clicked) = q_interaction.get_single() {
             nickname.0 = nickname_input.value.clone();
 
-            let mut client = client.clone();
-            let project_id = project_id.0.clone();
             let uid = token_data.local_id.clone();
             let nickname = nickname_input.clone();
 
-            runtime.spawn_background_task(|_ctx| async move {
-                let mut data = HashMap::new();
-                data.insert(
-                    "nickname".to_string(),
-                    Value {
-                        value_type: Some(ValueType::StringValue(nickname.value.clone())),
-                    },
-                );
+            let mut document_data = HashMap::new();
+            document_data.insert(
+                "nickname".to_string(),
+                Value {
+                    value_type: Some(ValueType::StringValue(nickname.value)),
+                },
+            );
 
-                let _ = client
-                    .0
-                    .update_document(UpdateDocumentRequest {
-                        document: Some(Document {
-                            name: format!(
-                                "projects/{project_id}/databases/(default)/documents/click/{uid}"
-                            ),
-                            fields: data.clone(),
-                            ..Default::default()
-                        }),
-                        update_mask: Some(DocumentMask {
-                            field_paths: vec!["nickname".into()],
-                        }),
-                        ..Default::default()
-                    })
-                    .await;
+            let document_path = format!("click/{uid}");
+
+            ew.send(UpdateDocumentEvent {
+                document_path,
+                document_data,
             });
 
             // TODO nickname update listener
@@ -673,10 +658,8 @@ fn leaderboard_button_system(
 fn delete_score_button_system(
     mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<DeleteScoreButton>)>,
     mut score: ResMut<Score>,
-    runtime: ResMut<TokioTasksRuntime>,
-    client: ResMut<BevyFirestoreClient>,
-    project_id: Res<ProjectId>,
     token_data: Option<Res<TokenData>>,
+    mut ew: EventWriter<UpdateDocumentEvent>,
 ) {
     // TODO early return, tooooo much right shift
     if let Some(token_data) = token_data {
@@ -684,35 +667,20 @@ fn delete_score_button_system(
             if *interaction == Interaction::Clicked {
                 score.0 = 0;
 
-                let mut client = client.clone();
-                let project_id = project_id.0.clone();
                 let uid = token_data.local_id.clone();
-                let mut data = HashMap::new();
-                data.insert(
+                let mut document_data = HashMap::new();
+                document_data.insert(
                     "score".to_string(),
                     Value {
                         value_type: Some(ValueType::IntegerValue(score.0)),
                     },
                 );
 
-                runtime.spawn_background_task(|_ctx| async move {
-                    // TODO errors
-                    let _ = client
-                        .0
-                        .update_document(UpdateDocumentRequest {
-                            document: Some(Document {
-                                name: format!(
-                                "projects/{project_id}/databases/(default)/documents/click/{uid}"
-                            ),
-                                fields: data.clone(),
-                                ..Default::default()
-                            }),
-                            update_mask: Some(DocumentMask {
-                                field_paths: vec!["score".into()],
-                            }),
-                            ..Default::default()
-                        })
-                        .await;
+                let document_path = format!("click/{uid}");
+
+                ew.send(UpdateDocumentEvent {
+                    document_path,
+                    document_data,
                 });
             }
         }
@@ -742,13 +710,14 @@ fn delete_account_button_system(
     if let Some(token_data) = token_data {
         for (interaction,) in &mut q_interaction {
             if *interaction == Interaction::Clicked {
-                let mut client = client.clone();
+                let mut client = client.0.clone();
                 let project_id = project_id.0.clone();
                 let uid = token_data.local_id.clone();
 
                 runtime.spawn_background_task(|mut ctx| async move {
                     let _ =
-                        delete_document(&mut client, &project_id, &format!("click/{}", uid)).await;
+                        async_delete_document(&mut client, &project_id, &format!("click/{}", uid))
+                            .await;
 
                     ctx.run_on_main_thread(|ctx| {
                         ctx.world
@@ -847,42 +816,25 @@ fn submit_score_button_system(
     mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<SubmitScoreButton>)>,
     score: Res<Score>,
     mut next_state: ResMut<NextState<AppScreenState>>,
-    runtime: ResMut<TokioTasksRuntime>,
-    client: ResMut<BevyFirestoreClient>,
-    project_id: Res<ProjectId>,
     token_data: Res<TokenData>,
+    mut ew: EventWriter<UpdateDocumentEvent>,
 ) {
     for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
-            let mut client = client.clone();
-            let project_id = project_id.0.clone();
             let uid = token_data.local_id.clone();
-            let mut data = HashMap::new();
-            data.insert(
+            let mut document_data = HashMap::new();
+            document_data.insert(
                 "score".to_string(),
                 Value {
                     value_type: Some(ValueType::IntegerValue(score.0)),
                 },
             );
 
-            runtime.spawn_background_task(|_ctx| async move {
-                // TODO errors
-                let _ = client
-                    .0
-                    .update_document(UpdateDocumentRequest {
-                        document: Some(Document {
-                            name: format!(
-                                "projects/{project_id}/databases/(default)/documents/click/{uid}"
-                            ),
-                            fields: data.clone(),
-                            ..Default::default()
-                        }),
-                        update_mask: Some(DocumentMask {
-                            field_paths: vec!["score".into()],
-                        }),
-                        ..Default::default()
-                    })
-                    .await;
+            let document_path = format!("click/{uid}");
+
+            ew.send(UpdateDocumentEvent {
+                document_path,
+                document_data,
             });
 
             next_state.set(AppScreenState::Leaderboard);
