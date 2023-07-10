@@ -95,9 +95,12 @@ impl Plugin for FirestorePlugin {
             .add_event::<CreateDocumentEvent>()
             .add_event::<CreateDocumentResponseEvent>()
             // Event Readers
-            .add_system(create_document_event_handler.in_set(OnUpdate(FirestoreState::Ready)))
             .add_system(
                 create_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            .add_system(
+                create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
             );
     }
 }
@@ -214,35 +217,76 @@ pub fn add_listener<T>(
 }
 
 // TODO make all of these event driven
+pub type DocumentResponse = Result<Document, Status>;
 
-pub struct CreateDocumentOptions {
+pub trait CreateDocumentEventBuilder {
+    fn new(options: Self) -> Self;
+    fn document_id(&self) -> String {
+        "".into()
+    }
+    fn collection_id(&self) -> String {
+        "".into()
+    }
+    fn document_data(&self) -> HashMap<String, Value> {
+        let h: HashMap<String, Value> = HashMap::new();
+        h
+    }
+}
+
+#[derive(Clone)]
+pub struct CreateDocumentEvent {
     pub document_id: String,
     pub collection_id: String,
     pub document_data: HashMap<String, Value>,
 }
 
-pub type DocumentResponse = Result<Document, Status>;
+impl CreateDocumentEventBuilder for CreateDocumentEvent {
+    fn new(options: CreateDocumentEvent) -> Self {
+        options
+    }
+    fn collection_id(&self) -> String {
+        self.collection_id.clone()
+    }
+    fn document_data(&self) -> HashMap<String, Value> {
+        self.document_data.clone()
+    }
+    fn document_id(&self) -> String {
+        self.document_id.clone()
+    }
+}
 
-pub struct CreateDocumentEvent(pub CreateDocumentOptions);
-
+#[derive(Clone)]
 pub struct CreateDocumentResponseEvent {
     pub result: Result<Document, Status>,
 }
 
-pub fn create_document_event_handler(
+pub trait DocResEventBuilder {
+    fn new(result: DocumentResponse) -> Self;
+}
+
+impl DocResEventBuilder for CreateDocumentResponseEvent {
+    fn new(result: DocumentResponse) -> Self {
+        CreateDocumentResponseEvent { result }
+    }
+}
+
+pub fn create_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
-    mut er: EventReader<CreateDocumentEvent>,
+    mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
     // TODO custom response event (passed in create event?)
-) {
+) where
+    R: DocResEventBuilder + Send + Sync + 'static + Clone,
+    T: CreateDocumentEventBuilder + Send + Sync + 'static + Clone,
+{
     for e in er.iter() {
         let mut client = client.0.clone();
         let project_id = project_id.0.clone();
 
-        let collection_id = e.0.collection_id.clone();
-        let document_id = e.0.document_id.clone();
-        let fields = e.0.document_data.clone();
+        let collection_id = e.clone().collection_id().clone();
+        let document_id = e.clone().document_id().clone();
+        let fields = e.clone().document_data().clone();
 
         runtime.spawn_background_task(|mut ctx| async move {
             let response: Result<Response<Document>, Status> = client
@@ -264,7 +308,7 @@ pub fn create_document_event_handler(
             };
 
             ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(CreateDocumentResponseEvent { result });
+                ctx.world.send_event(R::new(result));
             })
             .await;
         });
