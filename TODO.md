@@ -1,8 +1,6 @@
 Add custom event example
 
-Simplify CRUD example
-
-Add listener example
+Code comments
 
 Tests
 

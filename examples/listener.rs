@@ -1,0 +1,101 @@
+use std::collections::HashMap;
+
+use bevy::prelude::*;
+use bevy_firebase_auth::{log_in, log_out, GotAuthUrl};
+use bevy_firebase_firestore::{
+    deps::{listen_response::ResponseType, value::ValueType, Value},
+    CreateDocumentEvent, CreateListenerEvent, FirestoreState, ListenerResponseEvent,
+};
+
+#[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+enum AppAuthState {
+    #[default]
+    Setup,
+    LogIn,
+    LogOut,
+}
+
+fn main() {
+    App::new()
+        // Plugins
+        .add_plugins(DefaultPlugins)
+        .add_plugin(bevy_firebase_auth::AuthPlugin {
+            firebase_project_id: "test-auth-rs".into(),
+            ..Default::default()
+        })
+        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
+            emulator_url: Some("http://127.0.0.1:8080".into()),
+        })
+        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        // Auth
+        .add_state::<AppAuthState>()
+        .add_system(auth_url_listener)
+        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
+        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        // Test fns
+        .add_system(input)
+        .add_system(create_listener.in_schedule(OnEnter(FirestoreState::Ready)))
+        .add_system(listener_event_handler)
+        .run();
+}
+
+fn input(keys: Res<Input<KeyCode>>, mut next_state: ResMut<NextState<AppAuthState>>) {
+    if keys.just_pressed(KeyCode::I) {
+        next_state.set(AppAuthState::LogIn);
+    }
+
+    if keys.just_pressed(KeyCode::O) {
+        next_state.set(AppAuthState::LogOut);
+    }
+}
+
+fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
+    for e in er.iter() {
+        println!("Go to this URL to sign in:\n{}\n", e.0);
+    }
+}
+
+fn listener_event_handler(mut er: EventReader<ListenerResponseEvent>) {
+    for ev in er.iter() {
+        match ev.msg.response_type.as_ref().unwrap() {
+            ResponseType::DocumentChange(response) => {
+                println!("Document Changed: {:?}", response.document.clone().unwrap());
+            }
+            ResponseType::DocumentDelete(response) => {
+                println!("Document Deleted: {:?}", response.document.clone());
+            }
+            ResponseType::DocumentRemove(response) => {
+                println!("Document Removed: {:?}", response.document.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn create_listener(
+    mut document_creator: EventWriter<CreateDocumentEvent>,
+    mut listener_creator: EventWriter<CreateListenerEvent>,
+) {
+    let mut data = HashMap::new();
+
+    data.insert(
+        "test_field".to_string(),
+        Value {
+            value_type: Some(ValueType::IntegerValue(69)),
+        },
+    );
+
+    let doc_id = "listener_test";
+
+    let document_path = format!("test_collection/{}", doc_id);
+
+    listener_creator.send(CreateListenerEvent {
+        target: document_path,
+    });
+
+    document_creator.send(CreateDocumentEvent {
+        document_id: doc_id.into(),
+        collection_id: "test_collection".into(),
+        document_data: data.clone(),
+    });
+}

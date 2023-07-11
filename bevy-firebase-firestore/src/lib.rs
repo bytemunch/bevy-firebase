@@ -15,7 +15,6 @@ use std::{collections::HashMap, path::PathBuf};
 use crate::googleapis::google::firestore::v1::{
     firestore_client::FirestoreClient,
     listen_request::TargetChange,
-    listen_response::ResponseType,
     target::{DocumentsTarget, TargetType},
     CreateDocumentRequest, DeleteDocumentRequest, Document, DocumentMask, GetDocumentRequest,
     ListenRequest, ListenResponse, Target, UpdateDocumentRequest, Value,
@@ -94,13 +93,9 @@ impl Plugin for FirestorePlugin {
             .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)))
             // LISTENER
             .add_event::<CreateListenerEvent>()
-            .add_event::<ListenerEvent>()
+            .add_event::<ListenerResponseEvent>()
             .add_system(
-                create_listener_event_handler::<ListenerEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
-            )
-            .add_system(
-                listener_response_event_handler::<ListenerEvent>
+                create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
             // CREATE
@@ -108,9 +103,6 @@ impl Plugin for FirestorePlugin {
             .add_event::<CreateDocumentEvent>()
             .add_event::<CreateDocumentResponseEvent>()
             // Event Readers
-            .add_system(
-                create_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
-            )
             .add_system(
                 create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
@@ -121,9 +113,6 @@ impl Plugin for FirestorePlugin {
             .add_event::<UpdateDocumentResponseEvent>()
             // Event Readers
             .add_system(
-                update_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
-            )
-            .add_system(
                 update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
@@ -133,9 +122,6 @@ impl Plugin for FirestorePlugin {
             .add_event::<ReadDocumentResponseEvent>()
             // Event Readers
             .add_system(
-                read_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
-            )
-            .add_system(
                 read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
@@ -144,9 +130,6 @@ impl Plugin for FirestorePlugin {
             .add_event::<DeleteDocumentEvent>()
             .add_event::<DeleteDocumentResponseEvent>()
             // Event Readers
-            .add_system(
-                delete_document_response_event_handler.in_set(OnUpdate(FirestoreState::Ready)),
-            )
             .add_system(
                 delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
@@ -224,7 +207,7 @@ fn create_client(
 
 // LISTENER
 
-pub trait ListenerEventBuilder {
+pub trait ListenerResponseEventBuilder {
     fn new(msg: ListenResponse) -> Self;
     fn msg(&self) -> ListenResponse {
         ListenResponse {
@@ -233,13 +216,13 @@ pub trait ListenerEventBuilder {
     }
 }
 
-struct ListenerEvent {
-    msg: ListenResponse,
+pub struct ListenerResponseEvent {
+    pub msg: ListenResponse,
 }
 
-impl ListenerEventBuilder for ListenerEvent {
+impl ListenerResponseEventBuilder for ListenerResponseEvent {
     fn new(msg: ListenResponse) -> Self {
-        ListenerEvent { msg }
+        ListenerResponseEvent { msg }
     }
     fn msg(&self) -> ListenResponse {
         self.msg.clone()
@@ -252,7 +235,7 @@ pub fn add_listener<T>(
     project_id: String,
     target: String,
 ) where
-    T: ListenerEventBuilder + std::marker::Send + std::marker::Sync + 'static,
+    T: ListenerResponseEventBuilder + std::marker::Send + std::marker::Sync + 'static,
 {
     let mut client = client.clone();
 
@@ -288,72 +271,88 @@ pub fn add_listener<T>(
     });
 }
 
-pub struct CreateListenerEvent {
-    target: String,
+pub trait CreateListenerEventBuilder {
+    fn new(target: String) -> Self;
+    fn target(&self) -> String;
 }
 
-pub fn create_listener_event_handler<T>(
-    mut er: EventReader<CreateListenerEvent>,
+/// Responding to listener events:
+///
+/// ```
+/// fn listener_response_event_handler<T>(mut er: EventReader<T>)
+/// where
+///     T: Send + Sync + 'static + ListenerResponseEventBuilder,
+/// {
+///     for ev in er.iter() {
+///         match ev.msg().response_type.as_ref().unwrap() {
+///             ResponseType::TargetChange(response) => {
+///                 let change_type = response.target_change_type;
+///                 match change_type {
+///                     0 => {
+///                         // no change
+///                     }
+///                     1 => {
+///                         // target added
+///                     }
+///                     2 => {
+///                         // target removed
+///                     }
+///                     3 => {
+///                         // target current (research needed lol)
+///                     }
+///                     4 => {
+///                         // reset (also no idea)
+///                     }
+///                     _ => {
+///                         // unknown response
+///                     }
+///                 }
+///             }
+///             ResponseType::DocumentChange(response) => {
+///                 println!("Document Changed: {:?}", response.document.clone().unwrap());
+///             }
+///             ResponseType::DocumentDelete(response) => {
+///                 println!("Document Deleted: {:?}", response.document.clone());
+///             }
+///             ResponseType::DocumentRemove(response) => {
+///                 println!("Document Removed: {:?}", response.document.clone());
+///             }
+///             ResponseType::Filter(response) => {
+///                 println!("Filter: {:?}", response);
+///             }
+///         }
+///     }
+/// }
+/// ```
+pub struct CreateListenerEvent {
+    pub target: String,
+}
+
+impl CreateListenerEventBuilder for CreateListenerEvent {
+    fn new(target: String) -> Self {
+        CreateListenerEvent { target }
+    }
+    fn target(&self) -> String {
+        self.target.clone()
+    }
+}
+
+pub fn create_listener_event_handler<T, R>(
+    mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
     mut client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
 ) where
-    T: ListenerEventBuilder + Send + Sync + 'static,
+    T: CreateListenerEventBuilder + Send + Sync + 'static,
+    R: ListenerResponseEventBuilder + Send + Sync + 'static,
 {
     for e in er.iter() {
-        add_listener::<T>(
+        add_listener::<R>(
             &runtime,
             &mut client.0,
             project_id.0.clone(),
-            e.target.clone(),
+            e.target().clone(),
         )
-    }
-}
-
-fn listener_response_event_handler<T>(mut er: EventReader<T>)
-where
-    T: Send + Sync + 'static + ListenerEventBuilder,
-{
-    for ev in er.iter() {
-        match ev.msg().response_type.as_ref().unwrap() {
-            ResponseType::TargetChange(response) => {
-                let change_type = response.target_change_type;
-
-                // TODO match on googleapis::google::firestore::v1::target_change::TargetChangeType
-                match change_type {
-                    0 => {
-                        // no change
-                    }
-                    1 => {
-                        // target added
-                    }
-                    2 => {
-                        // target removed
-                    }
-                    3 => {
-                        // target current (research needed lol)
-                    }
-                    4 => {
-                        // reset (also no idea)
-                    }
-                    _ => {
-                        // unknown response
-                    }
-                }
-            }
-            ResponseType::DocumentChange(response) => {
-                println!("Document Changed: {:?}", response.document.clone().unwrap());
-            }
-            ResponseType::DocumentDelete(response) => {
-                println!("Document Deleted: {:?}", response.document.clone());
-            }
-            ResponseType::DocumentRemove(response) => {
-                println!("Document Removed: {:?}", response.document.clone());
-            }
-            ResponseType::Filter(response) => {
-                println!("Filter: {:?}", response);
-            }
-        }
     }
 }
 
@@ -526,18 +525,21 @@ pub fn create_document_event_handler<T, R>(
     }
 }
 
-fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResponseEvent>) {
-    for e in er.iter() {
-        match e.result.clone() {
-            Ok(result) => {
-                println!("Document created: {:?}", result)
-            }
-            Err(status) => {
-                println!("ERROR: Document create failed: {}", status)
-            }
-        }
-    }
-}
+// TODO response event handlers by user; example in docs
+// TODO one example for each of CRUD
+
+// fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResponseEvent>) {
+//     for e in er.iter() {
+//         match e.result.clone() {
+//             Ok(result) => {
+//                 println!("Document created: {:?}", result)
+//             }
+//             Err(status) => {
+//                 println!("ERROR: Document create failed: {}", status)
+//             }
+//         }
+//     }
+// }
 
 // UPDATE
 pub trait UpdateDocumentEventBuilder {
@@ -619,19 +621,6 @@ fn update_document_event_handler<T, R>(
     }
 }
 
-fn update_document_response_event_handler(mut er: EventReader<UpdateDocumentResponseEvent>) {
-    for e in er.iter() {
-        match e.result.clone() {
-            Ok(result) => {
-                println!("Document updated: {:?}", result)
-            }
-            Err(status) => {
-                println!("ERROR: Document update failed: {}", status)
-            }
-        }
-    }
-}
-
 // READ
 
 pub trait ReadDocumentEventBuilder {
@@ -703,19 +692,6 @@ fn read_document_event_handler<T, R>(
     }
 }
 
-fn read_document_response_event_handler(mut er: EventReader<ReadDocumentResponseEvent>) {
-    for e in er.iter() {
-        match e.result.clone() {
-            Ok(result) => {
-                println!("Document read: {:?}", result)
-            }
-            Err(status) => {
-                println!("ERROR: Document read failed: {}", status)
-            }
-        }
-    }
-}
-
 // DELETE
 
 pub trait DeleteDocumentEventBuilder {
@@ -784,18 +760,5 @@ fn delete_document_event_handler<T, R>(
             })
             .await;
         });
-    }
-}
-
-fn delete_document_response_event_handler(mut er: EventReader<DeleteDocumentResponseEvent>) {
-    for e in er.iter() {
-        match e.result.clone() {
-            Ok(result) => {
-                println!("Document deleted: {:?}", result)
-            }
-            Err(status) => {
-                println!("ERROR: Document delete failed: {}", status)
-            }
-        }
     }
 }
