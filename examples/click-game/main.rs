@@ -12,9 +12,9 @@ use bevy_firebase_auth::{
     delete_account, log_in, log_out, AuthState, GotAuthUrl, ProjectId, TokenData,
 };
 use bevy_firebase_firestore::{
-    async_delete_document, async_read_document,
-    deps::{value::ValueType, Document, DocumentMask, UpdateDocumentRequest, Value},
-    BevyFirestoreClient, FirestoreState, UpdateDocumentEvent,
+    async_delete_document, async_read_document, value::ValueType, BevyFirestoreClient, Document,
+    DocumentMask, FirestoreState, QueryDirection, QueryResponseEvent, RunQueryEvent,
+    UpdateDocumentEvent, UpdateDocumentRequest, Value,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 use util::despawn_with;
@@ -113,6 +113,7 @@ fn main() {
         .add_system(
             despawn_with::<LeaderboardData>.in_schedule(OnExit(AppScreenState::Leaderboard)),
         )
+        .add_system(query_response_event_handler)
         .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::Leaderboard)))
         .run();
 }
@@ -184,6 +185,10 @@ struct ReturnToMenuButton;
 
 #[derive(Component)]
 struct ScoreText;
+
+// LEADERBOARD
+#[derive(Component)]
+struct Leaderboard;
 
 // GAME LOGIC
 #[derive(Resource)]
@@ -857,9 +862,18 @@ fn build_leaderboard(
     mut commands: Commands,
     mut q_ui_base: Query<Entity, With<UiBase>>,
     ui: Res<UiSettings>,
+    mut ew: EventWriter<RunQueryEvent>,
 ) {
     println!("build_leaderboard");
     let ui_base = q_ui_base.single_mut();
+
+    // Run query
+    ew.send(RunQueryEvent {
+        parent: "".into(),
+        collection_id: "click".into(),
+        limit: Some(10),
+        order_by: ("score".into(), QueryDirection::Descending),
+    });
 
     commands.entity(ui_base).with_children(|parent| {
         // TITLE
@@ -870,7 +884,20 @@ fn build_leaderboard(
             LeaderboardData,
         ));
 
-        // TODO LEADERBOARD DISPLAY (scrollable UI w/ data from firestore)
+        parent
+            .spawn(NodeBundle {
+                style: Style {
+                    flex_direction: FlexDirection::Column,
+                    size: Size {
+                        width: Val::Px(300.),
+                        height: Val::Px(400.),
+                    },
+                    ..default()
+                },
+                ..default()
+            })
+            .insert(Leaderboard)
+            .insert(LeaderboardData);
 
         // RETURN TO MENU BUTTON
         parent
@@ -884,4 +911,10 @@ fn build_leaderboard(
                 ));
             });
     });
+}
+
+fn query_response_event_handler(mut er: EventReader<QueryResponseEvent>) {
+    for e in er.iter() {
+        println!("QUERY RECEIVED: {:?}", e.msg);
+    }
 }

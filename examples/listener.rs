@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_firebase_auth::{log_in, log_out, GotAuthUrl};
 use bevy_firebase_firestore::{
-    deps::{listen_response::ResponseType, value::ValueType, Value},
-    CreateDocumentEvent, CreateListenerEvent, FirestoreState, ListenerResponseEvent,
+    listen_response::ResponseType, value::ValueType, CreateDocumentEvent, CreateListenerEvent,
+    FirestoreState, ListenerResponseEvent, Value,
 };
 
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]

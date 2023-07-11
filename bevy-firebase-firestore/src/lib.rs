@@ -1,24 +1,9 @@
 mod googleapis;
 
-// re-exports
-// TODO find out if this is the right way of doing things
-pub mod deps {
-    use crate::googleapis;
-
-    pub use googleapis::google::firestore::v1::*;
-    pub use tonic::Status;
-}
-
 use std::fs::read_to_string;
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::googleapis::google::firestore::v1::{
-    firestore_client::FirestoreClient,
-    listen_request::TargetChange,
-    target::{DocumentsTarget, TargetType},
-    CreateDocumentRequest, DeleteDocumentRequest, Document, DocumentMask, GetDocumentRequest,
-    ListenRequest, ListenResponse, Target, UpdateDocumentRequest, Value,
-};
+pub use crate::googleapis::google::firestore::v1::*;
 
 use bevy::prelude::*;
 
@@ -27,13 +12,23 @@ use bevy_tokio_tasks::TokioTasksRuntime;
 
 use futures_lite::{stream, StreamExt};
 
+use googleapis::google::firestore::v1::firestore_client::FirestoreClient;
+use googleapis::google::firestore::v1::listen_request::TargetChange;
+use googleapis::google::firestore::v1::run_query_request::QueryType;
+use googleapis::google::firestore::v1::structured_query::{
+    CollectionSelector, FieldReference, Order,
+};
+use googleapis::google::firestore::v1::target::{DocumentsTarget, TargetType};
 use tonic::{
     codegen::InterceptedService,
     metadata::{Ascii, MetadataValue},
     service::Interceptor,
     transport::{Certificate, Channel, ClientTlsConfig},
-    Request, Response, Status,
+    Request, Response,
 };
+
+pub use googleapis::google::firestore::v1::structured_query::Direction as QueryDirection;
+pub use tonic::Status;
 
 // FIRESTORE
 #[derive(Resource, Clone)]
@@ -96,6 +91,13 @@ impl Plugin for FirestorePlugin {
             .add_event::<ListenerResponseEvent>()
             .add_system(
                 create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
+                    .in_set(OnUpdate(FirestoreState::Ready)),
+            )
+            // QUERY
+            .add_event::<QueryResponseEvent>()
+            .add_event::<RunQueryEvent>()
+            .add_system(
+                run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
             // CREATE
@@ -272,7 +274,6 @@ pub fn add_listener<T>(
 }
 
 pub trait CreateListenerEventBuilder {
-    fn new(target: String) -> Self;
     fn target(&self) -> String;
 }
 
@@ -329,9 +330,6 @@ pub struct CreateListenerEvent {
 }
 
 impl CreateListenerEventBuilder for CreateListenerEvent {
-    fn new(target: String) -> Self {
-        CreateListenerEvent { target }
-    }
     fn target(&self) -> String {
         self.target.clone()
     }
@@ -354,6 +352,142 @@ pub fn create_listener_event_handler<T, R>(
             e.target().clone(),
         )
     }
+}
+
+// QUERY
+
+type QueryResponse = Result<RunQueryResponse, Status>;
+pub trait QueryResponseEventBuilder {
+    fn new(msg: QueryResponse) -> Self;
+    fn msg(&self) -> QueryResponse;
+}
+
+pub struct QueryResponseEvent {
+    pub msg: QueryResponse,
+}
+
+impl QueryResponseEventBuilder for QueryResponseEvent {
+    fn new(msg: QueryResponse) -> Self {
+        QueryResponseEvent { msg }
+    }
+    fn msg(&self) -> QueryResponse {
+        self.msg.clone()
+    }
+}
+
+pub trait RunQueryEventBuilder {
+    fn parent(&self) -> String;
+    fn collection_id(&self) -> String;
+    fn limit(&self) -> Option<i32>;
+    fn order_by(&self) -> (String, QueryDirection);
+}
+
+pub struct RunQueryEvent {
+    pub parent: String,
+    pub collection_id: String,
+    pub limit: Option<i32>,
+    pub order_by: (String, QueryDirection),
+}
+
+impl RunQueryEventBuilder for RunQueryEvent {
+    fn collection_id(&self) -> String {
+        self.collection_id.clone()
+    }
+    fn limit(&self) -> Option<i32> {
+        self.limit
+    }
+    fn order_by(&self) -> (String, QueryDirection) {
+        self.order_by.clone()
+    }
+    fn parent(&self) -> String {
+        self.parent.clone()
+    }
+}
+
+pub fn run_query_event_handler<T, R>(
+    mut er: EventReader<T>,
+    runtime: ResMut<TokioTasksRuntime>,
+    mut client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
+) where
+    T: RunQueryEventBuilder + Send + Sync + 'static,
+    R: QueryResponseEventBuilder + Send + Sync + 'static,
+{
+    for e in er.iter() {
+        run_query::<R>(
+            &runtime,
+            &mut client.0,
+            project_id.0.clone(),
+            e.parent(),
+            e.collection_id(),
+            e.limit(),
+            e.order_by(),
+        )
+    }
+}
+
+// pub fn query_response_event_handler(mut er: EventReader<QueryResponseEvent>) {
+//     for e in er.iter() {
+//         println!("QUERY: {:?}", e.msg)
+//     }
+// }
+
+pub fn run_query<T>(
+    runtime: &ResMut<TokioTasksRuntime>,
+    client: &mut Client,
+    project_id: String,
+    parent: String,
+    collection_id: String,
+    limit: Option<i32>,
+    order_by: (String, QueryDirection),
+) where
+    T: QueryResponseEventBuilder + Send + Sync + 'static,
+{
+    let parent = if !parent.is_empty() {
+        format!("/{parent}")
+    } else {
+        "".into()
+    };
+
+    let mut client = client.clone();
+
+    let order_field = order_by.0.clone();
+    let order_direction = order_by.1;
+
+    runtime.spawn_background_task(move |mut ctx| async move {
+        let req = RunQueryRequest {
+            parent: format!("projects/{project_id}/databases/(default)/documents{parent}"),
+            query_type: Some(QueryType::StructuredQuery(StructuredQuery {
+                from: vec![CollectionSelector {
+                    collection_id,
+                    all_descendants: false,
+                }],
+                limit,
+                order_by: vec![Order {
+                    field: Some(FieldReference {
+                        field_path: order_field,
+                    }),
+                    direction: order_direction as i32,
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let mut res = client.run_query(req).await.unwrap().into_inner();
+
+        while let Some(msg) = res.next().await {
+            // TODO add query responses to a vec and pass that vec in the response event
+            //  continuation_selector should allow detecting the last result
+            // Needs error handling here to get to continuation_selector
+            // On error, pass error
+            // If no error, pass Ok(collated_responses)
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.send_event(T::new(msg));
+            })
+            .await;
+        }
+    });
 }
 
 // CRUD

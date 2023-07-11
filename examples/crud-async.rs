@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use bevy_firebase_auth::{log_in, log_out, GotAuthUrl, ProjectId};
 use bevy_firebase_firestore::{
     async_create_document,
-    deps::{value::ValueType, Status, Value},
-    FirestoreState,
+    value::ValueType,
+    FirestoreState, Status, Value,
     {async_delete_document, async_read_document, async_update_document, BevyFirestoreClient},
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
