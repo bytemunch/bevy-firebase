@@ -584,7 +584,7 @@ fn build_main_menu(
 
     commands.spawn_empty().insert(NicknameInput {
         value: "NewName".into(),
-    });
+    }); // value lost on state change? BUG NEEDS-INVESTIGATION
 }
 
 fn update_welcome_text(
@@ -841,7 +841,7 @@ fn submit_score_button_system(
                 document_path,
                 document_data,
             });
-
+            // TODO await document update THEN change to leaderboard
             next_state.set(AppScreenState::Leaderboard);
         }
     }

@@ -356,7 +356,7 @@ pub fn create_listener_event_handler<T, R>(
 
 // QUERY
 
-type QueryResponse = Result<RunQueryResponse, Status>;
+type QueryResponse = Result<Vec<RunQueryResponse>, Status>;
 pub trait QueryResponseEventBuilder {
     fn new(msg: QueryResponse) -> Self;
     fn msg(&self) -> QueryResponse;
@@ -476,17 +476,38 @@ pub fn run_query<T>(
 
         let mut res = client.run_query(req).await.unwrap().into_inner();
 
+        let mut responses = Vec::new();
+
+        let mut response_result = Ok(Vec::new());
+
         while let Some(msg) = res.next().await {
-            // TODO add query responses to a vec and pass that vec in the response event
-            //  continuation_selector should allow detecting the last result
-            // Needs error handling here to get to continuation_selector
-            // On error, pass error
-            // If no error, pass Ok(collated_responses)
-            ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(T::new(msg));
-            })
-            .await;
+            match msg {
+                Ok(msg) => {
+                    responses.push(msg.clone());
+
+                    if let Some(_continuation_selector) = msg.continuation_selector {
+                        // Break when at end of results
+                        break;
+                    }
+                }
+                Err(err) => {
+                    responses.clear();
+                    response_result = Err(err);
+                    // break on error
+                    break;
+                }
+            }
         }
+
+        response_result = match response_result {
+            Ok(_) => Ok(responses),
+            Err(err) => Err(err),
+        };
+
+        ctx.run_on_main_thread(move |ctx| {
+            ctx.world.send_event(T::new(response_result));
+        })
+        .await;
     });
 }
 

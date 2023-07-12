@@ -1,5 +1,3 @@
-Finish query implementation
-
 Add custom event example
 
 ID in events for filtering responses
