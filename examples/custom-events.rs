@@ -70,6 +70,7 @@ struct CustomCreateDocumentEvent {
     document_id: String,
     collection_id: String,
     document_data: HashMap<String, Value>,
+    id: usize,
 }
 
 impl CreateDocumentEventBuilder for CustomCreateDocumentEvent {
@@ -85,16 +86,20 @@ impl CreateDocumentEventBuilder for CustomCreateDocumentEvent {
     fn new(options: Self) -> Self {
         options
     }
+    fn id(&self) -> usize {
+        self.id
+    }
 }
 
 #[derive(Clone)]
 struct CustomCreateDocumentResponseEvent {
     result: DocumentResult,
+    id: usize,
 }
 
 impl CreateDocumentResponseEventBuilder for CustomCreateDocumentResponseEvent {
-    fn new(result: DocumentResult) -> Self {
-        CustomCreateDocumentResponseEvent { result }
+    fn new(result: DocumentResult, id: usize) -> Self {
+        CustomCreateDocumentResponseEvent { result, id }
     }
 }
 
@@ -104,10 +109,13 @@ fn custom_create_document_response_event_handler(
     for e in er.iter() {
         match e.result.clone() {
             Ok(result) => {
-                println!("Custom Event: Document created: {:?}", result);
+                println!("Custom Event: {} Document created: {:?}", e.id, result);
             }
             Err(status) => {
-                println!("Custom Event: ERROR: Document create failed: {}", status);
+                println!(
+                    "Custom Event: {} ERROR: Document create failed: {}",
+                    e.id, status
+                );
             }
         }
     }
@@ -129,5 +137,6 @@ fn create_test_document(mut document_creator: EventWriter<CustomCreateDocumentEv
         document_id,
         collection_id: "test_collection".into(),
         document_data,
+        id: 0b1000101,
     });
 }

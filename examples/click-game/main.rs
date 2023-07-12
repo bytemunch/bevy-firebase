@@ -14,7 +14,8 @@ use bevy_firebase_auth::{
 use bevy_firebase_firestore::{
     async_delete_document, async_read_document, async_update_document, value::ValueType,
     BevyFirestoreClient, Document, DocumentMask, FirestoreState, QueryDirection,
-    QueryResponseEvent, RunQueryEvent, UpdateDocumentEvent, UpdateDocumentRequest, Value,
+    QueryResponseEvent, RunQueryEvent, RunQueryResponse, Status, UpdateDocumentEvent,
+    UpdateDocumentRequest, Value,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 use util::despawn_with;
@@ -109,12 +110,14 @@ fn main() {
         .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::InGame)))
         .add_system(submit_score_button_system.in_set(OnUpdate(AppScreenState::InGame)))
         // leaderboard
+        .add_event::<UpdateLeaderboardEvent>()
         .add_system(build_leaderboard.in_schedule(OnEnter(AppScreenState::Leaderboard)))
         .add_system(
             despawn_with::<LeaderboardData>.in_schedule(OnExit(AppScreenState::Leaderboard)),
         )
         .add_system(query_response_event_handler)
         .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::Leaderboard)))
+        .add_system(update_leaderboard.in_set(OnUpdate(AppScreenState::Leaderboard)))
         .run();
 }
 
@@ -642,6 +645,7 @@ fn nickname_submit_button_system(
             ew.send(UpdateDocumentEvent {
                 document_path,
                 document_data,
+                id: 0,
             });
 
             // TODO nickname update listener
@@ -686,6 +690,7 @@ fn delete_score_button_system(
                 ew.send(UpdateDocumentEvent {
                     document_path,
                     document_data,
+                    id: 0,
                 });
             }
         }
@@ -882,6 +887,7 @@ fn build_leaderboard(
         collection_id: "click".into(),
         limit: Some(10),
         order_by: ("score".into(), QueryDirection::Descending),
+        id: 420,
     });
 
     commands.entity(ui_base).with_children(|parent| {
@@ -922,8 +928,101 @@ fn build_leaderboard(
     });
 }
 
-fn query_response_event_handler(mut er: EventReader<QueryResponseEvent>) {
+struct UpdateLeaderboardEvent {
+    responses: Result<Vec<RunQueryResponse>, Status>, // TODO simplify type
+}
+
+fn query_response_event_handler(
+    mut er: EventReader<QueryResponseEvent>,
+    mut ew: EventWriter<UpdateLeaderboardEvent>,
+) {
     for e in er.iter() {
-        println!("QUERY RECEIVED: {:?}", e.msg);
+        match e.id {
+            // This could be represented as an Enum #[repr(usize)]
+            420 => {
+                // This is our leaderboard event!
+                ew.send(UpdateLeaderboardEvent {
+                    responses: e.query_response.clone(),
+                })
+                // TODO emit UpdateLeaderboard event (with parsed responses?)
+            }
+            0 => {}
+            _ => {}
+        }
+
+        // println!("QUERY RECEIVED: {:?}", e.query_response);
+    }
+}
+
+fn update_leaderboard(
+    mut er: EventReader<UpdateLeaderboardEvent>,
+    mut q_leaderboard: Query<Entity, With<Leaderboard>>,
+    mut commands: Commands,
+    ui: Res<UiSettings>,
+) {
+    let leaderboard = q_leaderboard.single_mut();
+
+    for e in er.iter() {
+        match e.responses.clone() {
+            Ok(responses) => {
+                for response in responses {
+                    // extract relevant data from response
+                    let mut score: i64 = 0;
+                    let mut nickname = "anon".into();
+
+                    // TODO fix if-let hell
+                    // fn main() {
+                    //     fn f(_: bool, _: bool, _: bool) {}
+
+                    //     let a = Some(true);
+                    //     let b = Some(true);
+                    //     let c = Some(true);
+
+                    //     if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+                    //         f(a, b, c)
+                    //     }
+                    // }
+
+                    if let Some(doc) = response.document {
+                        nickname = if let Some(val) = doc.fields.get("nickname") {
+                            if let Some(ValueType::StringValue(nickname)) = val.clone().value_type {
+                                nickname
+                            } else {
+                                "anon".into()
+                            }
+                        } else {
+                            "anon".into()
+                        };
+
+                        score = if let Some(val) = doc.fields.get("score") {
+                            if let Some(ValueType::IntegerValue(score)) = val.clone().value_type {
+                                score
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+                    };
+
+                    commands.entity(leaderboard).with_children(|parent| {
+                        // TODO align score/text
+                        // column titles a la
+                        //  score          name
+                        //   696      xX_g4m3r_g0d_Xx
+                        //   123          n00bz3r
+
+                        parent.spawn(TextBundle::from_section(
+                            format!("{}: {}", nickname, score),
+                            ui.typefaces.p.clone(),
+                        ));
+                    });
+                }
+            }
+            Err(err) => {
+                // TODO write error message to leaderboard
+                println!("LEADERBOARD ERROR:{:?}", err)
+            }
+        }
     }
 }

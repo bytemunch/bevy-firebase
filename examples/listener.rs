@@ -97,5 +97,6 @@ fn create_listener(
         document_id: doc_id.into(),
         collection_id: "test_collection".into(),
         document_data: data.clone(),
+        id: 1337,
     });
 }

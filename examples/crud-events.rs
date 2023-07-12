@@ -174,12 +174,16 @@ fn create_test_document(mut document_creator: EventWriter<CreateDocumentEvent>) 
         document_id,
         collection_id: "test_collection".into(),
         document_data,
+        id: 0,
     });
 }
 
 fn read_test_document(mut document_reader: EventWriter<ReadDocumentEvent>) {
     let document_path = "test_collection/test_document".into();
-    document_reader.send(ReadDocumentEvent { document_path })
+    document_reader.send(ReadDocumentEvent {
+        document_path,
+        id: 1,
+    })
 }
 
 fn update_test_document(mut document_updater: EventWriter<UpdateDocumentEvent>) {
@@ -196,10 +200,14 @@ fn update_test_document(mut document_updater: EventWriter<UpdateDocumentEvent>) 
     document_updater.send(UpdateDocumentEvent {
         document_path,
         document_data,
+        id: 2,
     })
 }
 
 fn delete_test_document(mut document_deleter: EventWriter<DeleteDocumentEvent>) {
     let document_path = "test_collection/test_document".into();
-    document_deleter.send(DeleteDocumentEvent { document_path })
+    document_deleter.send(DeleteDocumentEvent {
+        document_path,
+        id: 3,
+    })
 }

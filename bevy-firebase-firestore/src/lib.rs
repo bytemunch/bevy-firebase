@@ -211,11 +211,7 @@ fn create_client(
 
 pub trait ListenerResponseEventBuilder {
     fn new(msg: ListenResponse) -> Self;
-    fn msg(&self) -> ListenResponse {
-        ListenResponse {
-            ..Default::default()
-        }
-    }
+    fn msg(&self) -> ListenResponse;
 }
 
 pub struct ListenerResponseEvent {
@@ -358,20 +354,21 @@ pub fn create_listener_event_handler<T, R>(
 
 type QueryResponse = Result<Vec<RunQueryResponse>, Status>;
 pub trait QueryResponseEventBuilder {
-    fn new(msg: QueryResponse) -> Self;
-    fn msg(&self) -> QueryResponse;
+    fn new(query_response: QueryResponse, id: usize) -> Self;
+    fn query_response(&self) -> QueryResponse;
 }
 
 pub struct QueryResponseEvent {
-    pub msg: QueryResponse,
+    pub query_response: QueryResponse,
+    pub id: usize,
 }
 
 impl QueryResponseEventBuilder for QueryResponseEvent {
-    fn new(msg: QueryResponse) -> Self {
-        QueryResponseEvent { msg }
+    fn new(query_response: QueryResponse, id: usize) -> Self {
+        QueryResponseEvent { query_response, id }
     }
-    fn msg(&self) -> QueryResponse {
-        self.msg.clone()
+    fn query_response(&self) -> QueryResponse {
+        self.query_response.clone()
     }
 }
 
@@ -380,13 +377,16 @@ pub trait RunQueryEventBuilder {
     fn collection_id(&self) -> String;
     fn limit(&self) -> Option<i32>;
     fn order_by(&self) -> (String, QueryDirection);
+    fn id(&self) -> usize;
 }
 
+#[derive(Clone)]
 pub struct RunQueryEvent {
     pub parent: String,
     pub collection_id: String,
     pub limit: Option<i32>,
     pub order_by: (String, QueryDirection),
+    pub id: usize,
 }
 
 impl RunQueryEventBuilder for RunQueryEvent {
@@ -401,6 +401,9 @@ impl RunQueryEventBuilder for RunQueryEvent {
     }
     fn parent(&self) -> String {
         self.parent.clone()
+    }
+    fn id(&self) -> usize {
+        self.id
     }
 }
 
@@ -422,6 +425,7 @@ pub fn run_query_event_handler<T, R>(
             e.collection_id(),
             e.limit(),
             e.order_by(),
+            e.id(),
         )
     }
 }
@@ -440,6 +444,7 @@ pub fn run_query<T>(
     collection_id: String,
     limit: Option<i32>,
     order_by: (String, QueryDirection),
+    id: usize,
 ) where
     T: QueryResponseEventBuilder + Send + Sync + 'static,
 {
@@ -480,12 +485,12 @@ pub fn run_query<T>(
 
         let mut response_result = Ok(Vec::new());
 
-        while let Some(msg) = res.next().await {
-            match msg {
-                Ok(msg) => {
-                    responses.push(msg.clone());
+        while let Some(result) = res.next().await {
+            match result {
+                Ok(query_response) => {
+                    responses.push(query_response.clone());
 
-                    if let Some(_continuation_selector) = msg.continuation_selector {
+                    if let Some(_continuation_selector) = query_response.continuation_selector {
                         // Break when at end of results
                         break;
                     }
@@ -505,7 +510,7 @@ pub fn run_query<T>(
         };
 
         ctx.run_on_main_thread(move |ctx| {
-            ctx.world.send_event(T::new(response_result));
+            ctx.world.send_event(T::new(response_result, id));
         })
         .await;
     });
@@ -588,17 +593,11 @@ pub type Client = FirestoreClient<InterceptedService<Channel, FirebaseIntercepto
 
 // CREATE
 pub trait CreateDocumentEventBuilder {
-    fn new(options: Self) -> Self;
-    fn document_id(&self) -> String {
-        "".into()
-    }
-    fn collection_id(&self) -> String {
-        "".into()
-    }
-    fn document_data(&self) -> HashMap<String, Value> {
-        let h: HashMap<String, Value> = HashMap::new();
-        h
-    }
+    fn new(event: Self) -> Self;
+    fn document_id(&self) -> String;
+    fn collection_id(&self) -> String;
+    fn document_data(&self) -> HashMap<String, Value>;
+    fn id(&self) -> usize;
 }
 
 #[derive(Clone)]
@@ -606,11 +605,12 @@ pub struct CreateDocumentEvent {
     pub document_id: String,
     pub collection_id: String,
     pub document_data: HashMap<String, Value>,
+    pub id: usize,
 }
 
 impl CreateDocumentEventBuilder for CreateDocumentEvent {
-    fn new(options: CreateDocumentEvent) -> Self {
-        options
+    fn new(event: Self) -> Self {
+        event
     }
     fn collection_id(&self) -> String {
         self.collection_id.clone()
@@ -621,20 +621,24 @@ impl CreateDocumentEventBuilder for CreateDocumentEvent {
     fn document_id(&self) -> String {
         self.document_id.clone()
     }
+    fn id(&self) -> usize {
+        self.id
+    }
 }
 
 pub trait CreateDocumentResponseEventBuilder {
-    fn new(result: DocumentResult) -> Self;
+    fn new(result: DocumentResult, id: usize) -> Self;
 }
 
 #[derive(Clone)]
 pub struct CreateDocumentResponseEvent {
     pub result: DocumentResult,
+    pub id: usize,
 }
 
 impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
-    fn new(result: DocumentResult) -> Self {
-        CreateDocumentResponseEvent { result }
+    fn new(result: DocumentResult, id: usize) -> Self {
+        CreateDocumentResponseEvent { result, id }
     }
 }
 
@@ -654,8 +658,9 @@ pub fn create_document_event_handler<T, R>(
         let collection_id = e.collection_id();
         let document_id = e.document_id();
         let fields = e.document_data();
+        let id = e.id();
 
-        runtime.spawn_background_task(|mut ctx| async move {
+        runtime.spawn_background_task(move |mut ctx| async move {
             let response = async_create_document(
                 &mut client,
                 &project_id,
@@ -671,7 +676,7 @@ pub fn create_document_event_handler<T, R>(
             };
 
             ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(R::new(result));
+                ctx.world.send_event(R::new(result, id));
             })
             .await;
         });
@@ -697,19 +702,16 @@ pub fn create_document_event_handler<T, R>(
 // UPDATE
 pub trait UpdateDocumentEventBuilder {
     fn new(event: Self) -> Self;
-    fn document_path(&self) -> String {
-        "".into()
-    }
-    fn document_data(&self) -> HashMap<String, Value> {
-        let h: HashMap<String, Value> = HashMap::new();
-        h
-    }
+    fn document_path(&self) -> String;
+    fn document_data(&self) -> HashMap<String, Value>;
+    fn id(&self) -> usize;
 }
 
 #[derive(Clone)]
 pub struct UpdateDocumentEvent {
     pub document_path: String,
     pub document_data: HashMap<String, Value>,
+    pub id: usize,
 }
 
 impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
@@ -722,20 +724,24 @@ impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
     fn document_path(&self) -> String {
         self.document_path.clone()
     }
+    fn id(&self) -> usize {
+        self.id
+    }
 }
 
 pub trait UpdateDocumentResponseEventBuilder {
-    fn new(result: DocumentResult) -> Self;
+    fn new(result: DocumentResult, id: usize) -> Self;
 }
 
 #[derive(Clone)]
 pub struct UpdateDocumentResponseEvent {
     pub result: DocumentResult,
+    pub id: usize,
 }
 
 impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
-    fn new(result: DocumentResult) -> Self {
-        UpdateDocumentResponseEvent { result }
+    fn new(result: DocumentResult, id: usize) -> Self {
+        UpdateDocumentResponseEvent { result, id }
     }
 }
 
@@ -754,8 +760,9 @@ fn update_document_event_handler<T, R>(
 
         let document_path = e.document_path();
         let fields = e.document_data();
+        let id = e.id();
 
-        runtime.spawn_background_task(|mut ctx| async move {
+        runtime.spawn_background_task(move |mut ctx| async move {
             let response =
                 async_update_document(&mut client, &project_id, &document_path, fields).await;
 
@@ -767,7 +774,7 @@ fn update_document_event_handler<T, R>(
             };
 
             ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(R::new(result));
+                ctx.world.send_event(R::new(result, id));
             })
             .await;
         });
@@ -778,14 +785,14 @@ fn update_document_event_handler<T, R>(
 
 pub trait ReadDocumentEventBuilder {
     fn new(event: Self) -> Self;
-    fn document_path(&self) -> String {
-        "".into()
-    }
+    fn document_path(&self) -> String;
+    fn id(&self) -> usize;
 }
 
 #[derive(Clone)]
 pub struct ReadDocumentEvent {
     pub document_path: String,
+    pub id: usize,
 }
 
 impl ReadDocumentEventBuilder for ReadDocumentEvent {
@@ -795,20 +802,24 @@ impl ReadDocumentEventBuilder for ReadDocumentEvent {
     fn document_path(&self) -> String {
         self.document_path.clone()
     }
+    fn id(&self) -> usize {
+        self.id
+    }
 }
 
 pub trait ReadDocumentResponseEventBuilder {
-    fn new(result: DocumentResult) -> Self;
+    fn new(result: DocumentResult, id: usize) -> Self;
 }
 
 #[derive(Clone)]
 pub struct ReadDocumentResponseEvent {
     pub result: DocumentResult,
+    pub id: usize,
 }
 
 impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
-    fn new(result: DocumentResult) -> Self {
-        ReadDocumentResponseEvent { result }
+    fn new(result: DocumentResult, id: usize) -> Self {
+        ReadDocumentResponseEvent { result, id }
     }
 }
 
@@ -827,7 +838,9 @@ fn read_document_event_handler<T, R>(
 
         let document_path = e.document_path();
 
-        runtime.spawn_background_task(|mut ctx| async move {
+        let id = e.id();
+
+        runtime.spawn_background_task(move |mut ctx| async move {
             let response = async_read_document(&mut client, &project_id, &document_path).await;
 
             // TODO DRY
@@ -838,7 +851,7 @@ fn read_document_event_handler<T, R>(
             };
 
             ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(R::new(result));
+                ctx.world.send_event(R::new(result, id));
             })
             .await;
         });
@@ -849,14 +862,14 @@ fn read_document_event_handler<T, R>(
 
 pub trait DeleteDocumentEventBuilder {
     fn new(event: Self) -> Self;
-    fn document_path(&self) -> String {
-        "".into()
-    }
+    fn document_path(&self) -> String;
+    fn id(&self) -> usize;
 }
 
 #[derive(Clone)]
 pub struct DeleteDocumentEvent {
     pub document_path: String,
+    pub id: usize,
 }
 
 impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
@@ -866,20 +879,24 @@ impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
     fn document_path(&self) -> String {
         self.document_path.clone()
     }
+    fn id(&self) -> usize {
+        self.id
+    }
 }
 
 pub trait DeleteDocumentResponseEventBuilder {
-    fn new(result: Result<(), Status>) -> Self;
+    fn new(result: Result<(), Status>, id: usize) -> Self;
 }
 
 #[derive(Clone)]
 pub struct DeleteDocumentResponseEvent {
     pub result: Result<(), Status>,
+    pub id: usize,
 }
 
 impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
-    fn new(result: Result<(), Status>) -> Self {
-        DeleteDocumentResponseEvent { result }
+    fn new(result: Result<(), Status>, id: usize) -> Self {
+        DeleteDocumentResponseEvent { result, id }
     }
 }
 
@@ -897,8 +914,9 @@ fn delete_document_event_handler<T, R>(
         let project_id = project_id.0.clone();
 
         let document_path = e.document_path();
+        let id = e.id();
 
-        runtime.spawn_background_task(|mut ctx| async move {
+        runtime.spawn_background_task(move |mut ctx| async move {
             let response = async_delete_document(&mut client, &project_id, &document_path).await;
 
             // TODO DRY
@@ -909,7 +927,7 @@ fn delete_document_event_handler<T, R>(
             };
 
             ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(R::new(result));
+                ctx.world.send_event(R::new(result, id));
             })
             .await;
         });

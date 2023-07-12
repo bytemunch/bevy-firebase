@@ -1,11 +1,7 @@
-ID in events for filtering responses
-
-Click leaderboard functionality
+Move protos submodule out of firestore ready for more APIs
 
 Code comments
 
 Tests
 
 Docs
-
-Move protos submodule out of firestore ready for more APIs
