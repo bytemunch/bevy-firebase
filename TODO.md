@@ -1,7 +1,5 @@
-Move protos submodule out of firestore ready for more APIs
-
-Code comments
+Query example
 
 Tests
 
-Docs
+bevy-firebase-auth Docs

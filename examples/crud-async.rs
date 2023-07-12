@@ -1,3 +1,5 @@
+// Performing Firestore operations with await syntax
+
 use std::collections::HashMap;
 
 use bevy::prelude::*;
@@ -62,6 +64,8 @@ fn async_operations(
     runtime: ResMut<TokioTasksRuntime>,
     project_id: Res<ProjectId>,
 ) {
+    // Performs document operations one after another
+
     let collection_id = "test_collection".to_owned();
     let document_id = "test_document".to_owned();
     let project_id = project_id.0.clone();
@@ -76,7 +80,7 @@ fn async_operations(
         },
     );
 
-    runtime.spawn_background_task(|mut ctx| async move {
+    runtime.spawn_background_task(|mut _ctx| async move {
         let document_path = &format!("{collection_id}/{document_id}");
 
         let _ = async_create_document(
@@ -88,11 +92,10 @@ fn async_operations(
         )
         .await;
 
-        ctx.sleep_updates(90).await;
-
         let read = async_read_document(&mut client, &project_id, document_path).await;
         println!("READ 1: {:?}\n", read);
 
+        // Modify and add data
         fields.insert(
             "test_field".into(),
             Value {
@@ -106,8 +109,6 @@ fn async_operations(
                 value_type: Some(ValueType::StringValue("Another String".into())),
             },
         );
-
-        ctx.sleep_updates(30).await;
 
         let _ =
             async_update_document(&mut client, &project_id, document_path, fields.clone()).await;

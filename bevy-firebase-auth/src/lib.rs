@@ -32,8 +32,6 @@ pub struct ApiKey(String);
 #[derive(Resource)]
 pub struct ProjectId(pub String);
 
-// TODO big struct that holds all of the returned info from auth
-
 // Retrieved
 #[derive(Deserialize, Resource, Default)]
 pub struct TokenData {
@@ -227,8 +225,6 @@ fn init_login(
     ew.send(GotAuthUrl(authorize_url));
 
     runtime.spawn_background_task(|mut ctx| async move {
-        // TODO fix blocking that prevents closing the app ???
-
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
@@ -397,7 +393,7 @@ fn refresh_login(
 
         // TODO handle errors here, panic prevents login button being generated
 
-        // Use Firebase Token TODO pull into fn?
+        // Use Firebase Token
         ctx.run_on_main_thread(move |ctx| {
             ctx.world.insert_resource(firebase_token);
 

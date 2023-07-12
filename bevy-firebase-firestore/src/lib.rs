@@ -31,23 +31,17 @@ pub use googleapis::google::firestore::v1::structured_query::Direction as QueryD
 pub use tonic::Status;
 
 // FIRESTORE
+
+/// Bevy `Resource` that holds the Firestore RPC client
+///
+/// This is inserted during the `FirestorePlugin` instantiation, and is meant
+/// to provide access to the RPC bindings from anywhere in the app.
 #[derive(Resource, Clone)]
 pub struct BevyFirestoreClient(
     pub FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>,
 );
 
-#[derive(Resource, Clone)]
-struct EmulatorUrl(String);
-
-#[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum FirestoreState {
-    #[default]
-    Start,
-    Init,
-    CreateClient,
-    Ready,
-}
-
+/// Adds authorization headers to RPC requests
 #[derive(Clone)]
 pub struct FirebaseInterceptor {
     bearer_token: MetadataValue<Ascii>,
@@ -70,14 +64,44 @@ impl Interceptor for FirebaseInterceptor {
     }
 }
 
+/// Firestore connection status. Use Firestore only when this is `FirestoreState::Ready`
+#[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+pub enum FirestoreState {
+    #[default]
+    Start,
+    Init,
+    CreateClient,
+    Ready,
+}
+
+/// Bevy plugin for Firestore systems. Expects access to resources added
+/// by bevy-firebase-auth: `TokenData`, `AuthState` and `ProjectId`
+///
+/// # Examples
+///
+/// With emulated Firestore:
+/// ```
+/// App::new()
+///     .add_plugin(FirestorePlugin {
+///         emulator_url: Some("http://127.0.0.1:8080".into()),
+///     });
+/// ```
+///
+/// Live Firestore:
+/// ```
+/// App::new()
+///     .add_plugin(FirestorePlugin::default());
+/// ```
 #[derive(Default)]
 pub struct FirestorePlugin {
     pub emulator_url: Option<String>,
 }
 
+#[derive(Resource, Clone)]
+struct EmulatorUrl(String);
+
 impl Plugin for FirestorePlugin {
     fn build(&self, app: &mut App) {
-        // TODO refresh client token when app token is refreshed
         if self.emulator_url.is_some() {
             app.insert_resource(EmulatorUrl(self.emulator_url.clone().unwrap()));
         }
@@ -101,37 +125,29 @@ impl Plugin for FirestorePlugin {
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
             // CREATE
-            // Events
             .add_event::<CreateDocumentEvent>()
             .add_event::<CreateDocumentResponseEvent>()
-            // Event Readers
             .add_system(
                 create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
             // UPDATE
-            // Events
             .add_event::<UpdateDocumentEvent>()
             .add_event::<UpdateDocumentResponseEvent>()
-            // Event Readers
             .add_system(
                 update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
             // READ
-            // Events
             .add_event::<ReadDocumentEvent>()
             .add_event::<ReadDocumentResponseEvent>()
-            // Event Readers
             .add_system(
                 read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
             )
             // DELETE
-            // Events
             .add_event::<DeleteDocumentEvent>()
             .add_event::<DeleteDocumentResponseEvent>()
-            // Event Readers
             .add_system(
                 delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
                     .in_set(OnUpdate(FirestoreState::Ready)),
@@ -209,70 +225,29 @@ fn create_client(
 
 // LISTENER
 
+/// Implement this to create custom listener response events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl ListenerResponseEventBuilder for ListenerResponseEvent {
+///    fn new(msg: ListenResponse) -> Self {
+///        ListenerResponseEvent { msg }
+///    }
+///    fn msg(&self) -> ListenResponse {
+///        self.msg.clone()
+///    }
+/// }
+/// ```
 pub trait ListenerResponseEventBuilder {
     fn new(msg: ListenResponse) -> Self;
     fn msg(&self) -> ListenResponse;
 }
 
-pub struct ListenerResponseEvent {
-    pub msg: ListenResponse,
-}
-
-impl ListenerResponseEventBuilder for ListenerResponseEvent {
-    fn new(msg: ListenResponse) -> Self {
-        ListenerResponseEvent { msg }
-    }
-    fn msg(&self) -> ListenResponse {
-        self.msg.clone()
-    }
-}
-
-pub fn add_listener<T>(
-    runtime: &ResMut<TokioTasksRuntime>,
-    client: &mut Client,
-    project_id: String,
-    target: String,
-) where
-    T: ListenerResponseEventBuilder + std::marker::Send + std::marker::Sync + 'static,
-{
-    let mut client = client.clone();
-
-    runtime.spawn_background_task(|mut ctx| async move {
-        let db = format!("projects/{project_id}/databases/(default)");
-        let req = ListenRequest {
-            database: db.clone(),
-            labels: HashMap::new(),
-            target_change: Some(TargetChange::AddTarget(Target {
-                target_id: 0x52757374, // rust in hex, for... reasons?
-                once: false,
-                resume_type: None,
-                target_type: Some(TargetType::Documents(DocumentsTarget {
-                    documents: vec![db + "/documents/" + &*target],
-                })),
-                ..Default::default()
-            })),
-        };
-
-        let req = Request::new(stream::iter(vec![req]).chain(stream::pending()));
-
-        // TODO handle errors
-        let res = client.listen(req).await.unwrap();
-
-        let mut res = res.into_inner();
-
-        while let Some(msg) = res.next().await {
-            ctx.run_on_main_thread(move |ctx| {
-                ctx.world.send_event(T::new(msg.unwrap()));
-            })
-            .await;
-        }
-    });
-}
-
-pub trait CreateListenerEventBuilder {
-    fn target(&self) -> String;
-}
-
+/// Event that contains a `ListenResponse`
+///
+/// # Examples
 /// Responding to listener events:
 ///
 /// ```
@@ -321,6 +296,93 @@ pub trait CreateListenerEventBuilder {
 ///     }
 /// }
 /// ```
+pub struct ListenerResponseEvent {
+    pub msg: ListenResponse,
+}
+
+impl ListenerResponseEventBuilder for ListenerResponseEvent {
+    fn new(msg: ListenResponse) -> Self {
+        ListenerResponseEvent { msg }
+    }
+    fn msg(&self) -> ListenResponse {
+        self.msg.clone()
+    }
+}
+
+// TODO removing / clearing listeners
+// Put JoinHandle and id in a resource vec?
+fn add_listener<T>(
+    runtime: &ResMut<TokioTasksRuntime>,
+    client: &mut Client,
+    project_id: String,
+    target: String,
+) where
+    T: ListenerResponseEventBuilder + std::marker::Send + std::marker::Sync + 'static,
+{
+    let mut client = client.clone();
+
+    runtime.spawn_background_task(|mut ctx| async move {
+        let db = format!("projects/{project_id}/databases/(default)");
+        let req = ListenRequest {
+            database: db.clone(),
+            labels: HashMap::new(),
+            target_change: Some(TargetChange::AddTarget(Target {
+                target_id: 0x52757374, // rust in hex, for... reasons?
+                once: false,
+                resume_type: None,
+                target_type: Some(TargetType::Documents(DocumentsTarget {
+                    documents: vec![db + "/documents/" + &*target],
+                })),
+                ..Default::default()
+            })),
+        };
+
+        let req = Request::new(stream::iter(vec![req]).chain(stream::pending()));
+
+        // TODO handle errors
+        let res = client.listen(req).await.unwrap();
+
+        let mut res = res.into_inner();
+
+        while let Some(msg) = res.next().await {
+            ctx.run_on_main_thread(move |ctx| {
+                ctx.world.send_event(T::new(msg.unwrap()));
+            })
+            .await;
+        }
+    });
+}
+
+/// Implement this to create custom listener create events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl CreateListenerEventBuilder for CreateListenerEvent {
+///     fn target(&self) -> String {
+///         self.target.clone()
+///     }
+/// }
+pub trait CreateListenerEventBuilder {
+    fn target(&self) -> String;
+}
+
+/// An event holding the target for a listener
+///
+/// # Examples
+///
+/// Sending a CreateListenerEvent:
+/// ```
+/// fn create_listener(
+///     mut listener_creator: EventWriter<CreateListenerEvent>,
+/// ) {
+///     let document_path = "test_collection/test_document".into();
+///
+///     listener_creator.send(CreateListenerEvent {
+///         target: document_path,
+///     });
+/// }
 pub struct CreateListenerEvent {
     pub target: String,
 }
@@ -331,6 +393,25 @@ impl CreateListenerEventBuilder for CreateListenerEvent {
     }
 }
 
+/// Listens for events and creates Firestore listeners.
+///
+/// # Examples
+///
+/// ## Implementing:
+/// ```
+/// app
+///     .add_event::<CreateListenerEvent>()
+///     .add_event::<ListenerResponseEvent>()
+///     .add_system(create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
+///         .in_set(OnUpdate(FirestoreState::Ready)
+///     ),);
+/// ```
+///
+/// ## Using:
+/// ```
+/// fn create_listener(mut ew: EventWriter<CreateListenerEvent>) {
+///     ew.send(CreateListenerEvent { target: String::from("test_collection/test_document")})
+/// }
 pub fn create_listener_event_handler<T, R>(
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
@@ -353,11 +434,40 @@ pub fn create_listener_event_handler<T, R>(
 // QUERY
 
 type QueryResponse = Result<Vec<RunQueryResponse>, Status>;
+
+/// Implement this to create custom listener response events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl QueryResponseEventBuilder for QueryResponseEvent {
+///     fn new(query_response: QueryResponse, id: usize) -> Self {
+///         QueryResponseEvent { query_response, id }
+///     }
+///     fn query_response(&self) -> QueryResponse {
+///         self.query_response.clone()
+///     }
+/// }
+/// ```
 pub trait QueryResponseEventBuilder {
     fn new(query_response: QueryResponse, id: usize) -> Self;
     fn query_response(&self) -> QueryResponse;
 }
 
+/// Event that contains a `QueryResponse`
+///
+/// # Examples
+/// Responding to a `QueryResponseEvent`:
+/// ```
+/// fn query_response_event_handler(
+///     mut er: EventReader<QueryResponseEvent>,
+/// ) {
+///     for e in er.iter() {
+///         println!("QUERY RECEIVED: {:?}", e.query_response);
+///     }
+/// }
+/// ```
 pub struct QueryResponseEvent {
     pub query_response: QueryResponse,
     pub id: usize,
@@ -372,6 +482,29 @@ impl QueryResponseEventBuilder for QueryResponseEvent {
     }
 }
 
+/// Implement this to create custom query events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl RunQueryEventBuilder for RunQueryEvent {
+///     fn collection_id(&self) -> String {
+///         self.collection_id.clone()
+///     }
+///     fn limit(&self) -> Option<i32> {
+///         self.limit
+///     }
+///     fn order_by(&self) -> (String, QueryDirection) {
+///         self.order_by.clone()
+///     }
+///     fn parent(&self) -> String {
+///         self.parent.clone()
+///     }
+///     fn id(&self) -> usize {
+///         self.id
+///     }
+/// }
 pub trait RunQueryEventBuilder {
     fn parent(&self) -> String;
     fn collection_id(&self) -> String;
@@ -380,6 +513,17 @@ pub trait RunQueryEventBuilder {
     fn id(&self) -> usize;
 }
 
+/// An event holding the parameters for a Query
+///
+/// # Examples
+/// ```
+/// RunQueryEvent {
+///     parent: "".into(),
+///     collection_id: "test_collection".into(),
+///     limit: Some(10),
+///     order_by: ("price", QueryDirection::Ascending),
+///     id: 1337,
+/// }
 #[derive(Clone)]
 pub struct RunQueryEvent {
     pub parent: String,
@@ -407,6 +551,33 @@ impl RunQueryEventBuilder for RunQueryEvent {
     }
 }
 
+/// Listens for events and creates Firestore listeners.
+///
+/// # Examples
+///
+/// ## Implementing:
+/// ```
+/// app
+///     .add_event::<RunQueryEvent>()
+///     .add_event::<QueryResponseEvent>()
+///     .add_system(run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
+///         .in_set(OnUpdate(FirestoreState::Ready)
+///     ),);
+/// ```
+///
+/// ## Using:
+/// ```
+/// fn run_query(mut ew: EventWriter<RunQueryEvent>) {
+///     ew.send(
+///         RunQueryEvent {
+///             parent: "".into(),
+///             collection_id: "test_collection".into(),
+///             limit: Some(10),
+///             order_by: ("price", QueryDirection::Ascending),
+///             id: 1337,
+///         }
+///     )
+/// }
 pub fn run_query_event_handler<T, R>(
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
@@ -430,13 +601,7 @@ pub fn run_query_event_handler<T, R>(
     }
 }
 
-// pub fn query_response_event_handler(mut er: EventReader<QueryResponseEvent>) {
-//     for e in er.iter() {
-//         println!("QUERY: {:?}", e.msg)
-//     }
-// }
-
-pub fn run_query<T>(
+fn run_query<T>(
     runtime: &ResMut<TokioTasksRuntime>,
     client: &mut Client,
     project_id: String,
@@ -518,6 +683,7 @@ pub fn run_query<T>(
 
 // CRUD
 
+/// Creates a Firestore document
 pub async fn async_create_document(
     client: &mut Client,
     project_id: &String,
@@ -539,6 +705,7 @@ pub async fn async_create_document(
         .await
 }
 
+/// Updates a Firestore document
 pub async fn async_update_document(
     client: &mut Client,
     project_id: &String,
@@ -562,6 +729,7 @@ pub async fn async_update_document(
         .await
 }
 
+/// Reads a Firestore document
 pub async fn async_read_document(
     client: &mut Client,
     project_id: &String,
@@ -575,6 +743,7 @@ pub async fn async_read_document(
         .await
 }
 
+/// Deletes a Firestore document
 pub async fn async_delete_document(
     client: &mut Client,
     project_id: &String,
@@ -592,6 +761,30 @@ pub type DocumentResult = Result<Document, Status>;
 pub type Client = FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>;
 
 // CREATE
+
+/// Implement this to create custom document create events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl CreateDocumentEventBuilder for CreateDocumentEvent {
+///     fn new(event: Self) -> Self {
+///         event
+///     }
+///     fn collection_id(&self) -> String {
+///         self.collection_id.clone()
+///     }
+///     fn document_data(&self) -> HashMap<String, Value> {
+///         self.document_data.clone()
+///     }
+///     fn document_id(&self) -> String {
+///         self.document_id.clone()
+///     }
+///     fn id(&self) -> usize {
+///         self.id
+///     }
+/// }
 pub trait CreateDocumentEventBuilder {
     fn new(event: Self) -> Self;
     fn document_id(&self) -> String;
@@ -600,6 +793,29 @@ pub trait CreateDocumentEventBuilder {
     fn id(&self) -> usize;
 }
 
+/// An event holding the parameters for a document to create
+///
+/// # Examples
+///
+/// Sending a CreateDocumentEvent:
+/// ```
+/// fn create_test_document(mut document_creator: EventWriter<CreateDocumentEvent>) {
+///     let document_id = "test_document".to_owned();
+///     let mut document_data = HashMap::new();
+///     document_data.insert(
+///         "test_field".to_string(),
+///         Value {
+///             value_type: Some(ValueType::IntegerValue(69)),
+///         },
+///     );
+///
+///     document_creator.send(CreateDocumentEvent {
+///         document_id,
+///         collection_id: "test_collection".into(),
+///         document_data,
+///         id: 0,
+///     });
+/// }
 #[derive(Clone)]
 pub struct CreateDocumentEvent {
     pub document_id: String,
@@ -626,10 +842,41 @@ impl CreateDocumentEventBuilder for CreateDocumentEvent {
     }
 }
 
+/// Implement this to create custom CreateDocumentResponse events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
+///     fn new(result: DocumentResult, id: usize) -> Self {
+///         CreateDocumentResponseEvent { result, id }
+///     }
+/// }
 pub trait CreateDocumentResponseEventBuilder {
     fn new(result: DocumentResult, id: usize) -> Self;
 }
 
+/// Event that holds the result of a DocumentCreateEvent
+///
+/// This event is sent after a CreateDocumentEvent is consumed.
+///
+/// # Examples
+///
+/// Consuming the response event:
+/// ```
+/// fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResponseEvent>) {
+///     for e in er.iter() {
+///         match e.result.clone() {
+///             Ok(result) => {
+///                 println!("Document created: {:?}", result)
+///             }
+///             Err(status) => {
+///                 println!("ERROR: Document create failed: {}", status)
+///             }
+///         }
+///     }
+/// }
 #[derive(Clone)]
 pub struct CreateDocumentResponseEvent {
     pub result: DocumentResult,
@@ -642,6 +889,21 @@ impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
     }
 }
 
+/// Listens for events and creates Firestore documents
+///
+/// Sends a response event after the operation is completed. The creation and
+/// response events are defined as generics.
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// app.add_event::<CreateDocumentEvent>()
+/// .add_event::<CreateDocumentResponseEvent>()
+/// .add_system(
+///     create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
+///         .in_set(OnUpdate(FirestoreState::Ready)),
+/// );
 pub fn create_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
@@ -683,23 +945,28 @@ pub fn create_document_event_handler<T, R>(
     }
 }
 
-// TODO response event handlers by user; example in docs
-// TODO one example for each of CRUD
-
-// fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResponseEvent>) {
-//     for e in er.iter() {
-//         match e.result.clone() {
-//             Ok(result) => {
-//                 println!("Document created: {:?}", result)
-//             }
-//             Err(status) => {
-//                 println!("ERROR: Document create failed: {}", status)
-//             }
-//         }
-//     }
-// }
-
 // UPDATE
+
+/// Implement this to create custom document update events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
+///     fn new(event: UpdateDocumentEvent) -> Self {
+///         event
+///     }
+///     fn document_data(&self) -> HashMap<String, Value> {
+///         self.document_data.clone()
+///     }
+///     fn document_path(&self) -> String {
+///         self.document_path.clone()
+///     }
+///     fn id(&self) -> usize {
+///         self.id
+///     }
+/// }
 pub trait UpdateDocumentEventBuilder {
     fn new(event: Self) -> Self;
     fn document_path(&self) -> String;
@@ -707,6 +974,29 @@ pub trait UpdateDocumentEventBuilder {
     fn id(&self) -> usize;
 }
 
+/// An event holding the parameters for a document to update
+///
+/// # Examples
+///
+/// Sending an UpdateDocumentEvent:
+/// ```
+/// fn update_test_document(mut document_updater: EventWriter<UpdateDocumentEvent>) {
+///     let document_path = "test_collection/test_document".into();
+///     let mut document_data = HashMap::new();
+///
+///     document_data.insert(
+///         "test_field".to_string(),
+///         Value {
+///             value_type: Some(ValueType::IntegerValue(420)),
+///         },
+///     );
+///
+///     document_updater.send(UpdateDocumentEvent {
+///         document_path,
+///         document_data,
+///         id: 2,
+///     })
+/// }
 #[derive(Clone)]
 pub struct UpdateDocumentEvent {
     pub document_path: String,
@@ -729,10 +1019,43 @@ impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
     }
 }
 
+/// Implement this to create custom UpdateDocumentResponse events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
+///     fn new(result: DocumentResult, id: usize) -> Self {
+///         UpdateDocumentResponseEvent { result, id }
+///     }
+/// }
 pub trait UpdateDocumentResponseEventBuilder {
     fn new(result: DocumentResult, id: usize) -> Self;
 }
 
+/// Event that holds the result of an UpdateDocumentEvent
+///
+/// This event is sent after an UpdateDocumentEvent is consumed.
+///
+/// # Examples
+///
+/// Consuming the response event:
+/// ```
+/// fn update_document_response_event_handler(
+///     mut er: EventReader<UpdateDocumentResponseEvent>,
+/// ) {
+///     for e in er.iter() {
+///         match e.result.clone() {
+///             Ok(result) => {
+///                 println!("Document updated: {:?}", result);
+///             }
+///             Err(status) => {
+///                 println!("ERROR: Document update failed: {}", status)
+///             }
+///         }
+///     }
+/// }
 #[derive(Clone)]
 pub struct UpdateDocumentResponseEvent {
     pub result: DocumentResult,
@@ -745,7 +1068,22 @@ impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
     }
 }
 
-fn update_document_event_handler<T, R>(
+/// Listens for events and updates Firestore documents
+///
+/// Sends a response event after the operation is completed. The update and
+/// response events are defined as generics.
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// app.add_event::<UpdateDocumentEvent>()
+/// .add_event::<UpdateDocumentResponseEvent>()
+/// .add_system(
+///     update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
+///         .in_set(OnUpdate(FirestoreState::Ready)),
+/// );
+pub fn update_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
     mut er: EventReader<T>,
@@ -766,8 +1104,6 @@ fn update_document_event_handler<T, R>(
             let response =
                 async_update_document(&mut client, &project_id, &document_path, fields).await;
 
-            // TODO DRY
-
             let result = match response {
                 Ok(result) => Ok(result.into_inner()),
                 Err(status) => Err(status),
@@ -783,12 +1119,42 @@ fn update_document_event_handler<T, R>(
 
 // READ
 
+/// Implement this to create custom document read events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl ReadDocumentEventBuilder for ReadDocumentEvent {
+///     fn new(event: ReadDocumentEvent) -> Self {
+///         event
+///     }
+///     fn document_path(&self) -> String {
+///         self.document_path.clone()
+///     }
+///     fn id(&self) -> usize {
+///         self.id
+///     }
+/// }
 pub trait ReadDocumentEventBuilder {
     fn new(event: Self) -> Self;
     fn document_path(&self) -> String;
     fn id(&self) -> usize;
 }
 
+/// An event holding the parameters for a document to read
+///
+/// # Examples
+///
+/// Sending a ReadDocumentEvent:
+/// ```
+/// fn read_test_document(mut document_reader: EventWriter<ReadDocumentEvent>) {
+///     let document_path = "test_collection/test_document".into();
+///     document_reader.send(ReadDocumentEvent {
+///         document_path,
+///         id: 1,
+///     })
+/// }
 #[derive(Clone)]
 pub struct ReadDocumentEvent {
     pub document_path: String,
@@ -807,10 +1173,41 @@ impl ReadDocumentEventBuilder for ReadDocumentEvent {
     }
 }
 
+/// Implement this to create custom ReadDocumentResponse events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
+///     fn new(result: DocumentResult, id: usize) -> Self {
+///         ReadDocumentResponseEvent { result, id }
+///     }
+/// }
 pub trait ReadDocumentResponseEventBuilder {
     fn new(result: DocumentResult, id: usize) -> Self;
 }
 
+/// Event that holds the result of a ReadDocumentEvent
+///
+/// This event is sent after a ReadDocumentEvent is consumed.
+///
+/// # Examples
+///
+/// Consuming the response event:
+/// ```
+/// fn read_document_response_event_handler(mut er: EventReader<ReadDocumentResponseEvent>) {
+///     for e in er.iter() {
+///         match e.result.clone() {
+///             Ok(result) => {
+///                 println!("Document read: {:?}", result);
+///             }
+///             Err(status) => {
+///                 println!("ERROR: Document read failed: {}", status)
+///             }
+///         }
+///     }
+/// }
 #[derive(Clone)]
 pub struct ReadDocumentResponseEvent {
     pub result: DocumentResult,
@@ -823,7 +1220,22 @@ impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
     }
 }
 
-fn read_document_event_handler<T, R>(
+/// Listens for events and reads Firestore documents
+///
+/// Sends a response event after the operation is completed. The read and
+/// response events are defined as generics.
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// app.add_event::<ReadDocumentEvent>()
+/// .add_event::<ReadDocumentResponseEvent>()
+/// .add_system(
+///     read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
+///         .in_set(OnUpdate(FirestoreState::Ready)),
+/// )
+pub fn read_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
     mut er: EventReader<T>,
@@ -843,8 +1255,6 @@ fn read_document_event_handler<T, R>(
         runtime.spawn_background_task(move |mut ctx| async move {
             let response = async_read_document(&mut client, &project_id, &document_path).await;
 
-            // TODO DRY
-
             let result = match response {
                 Ok(result) => Ok(result.into_inner()),
                 Err(status) => Err(status),
@@ -860,12 +1270,42 @@ fn read_document_event_handler<T, R>(
 
 // DELETE
 
+/// Implement this to create custom document delete events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
+///     fn new(event: DeleteDocumentEvent) -> Self {
+///         event
+///     }
+///     fn document_path(&self) -> String {
+///         self.document_path.clone()
+///     }
+///     fn id(&self) -> usize {
+///         self.id
+///     }
+/// }
 pub trait DeleteDocumentEventBuilder {
     fn new(event: Self) -> Self;
     fn document_path(&self) -> String;
     fn id(&self) -> usize;
 }
 
+/// An event holding the parameters for a document to delete
+///
+/// # Examples
+///
+/// Sending a DeleteDocumentEvent:
+/// ```
+/// fn delete_test_document(mut document_deleter: EventWriter<DeleteDocumentEvent>) {
+///     let document_path = "test_collection/test_document".into();
+///     document_deleter.send(DeleteDocumentEvent {
+///         document_path,
+///         id: 3,
+///     })
+/// }
 #[derive(Clone)]
 pub struct DeleteDocumentEvent {
     pub document_path: String,
@@ -884,10 +1324,43 @@ impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
     }
 }
 
+/// Implement this to create custom DeleteDocumentResponse events
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
+///     fn new(result: Result<(), Status>, id: usize) -> Self {
+///         DeleteDocumentResponseEvent { result, id }
+///     }
+/// }
 pub trait DeleteDocumentResponseEventBuilder {
     fn new(result: Result<(), Status>, id: usize) -> Self;
 }
 
+/// Event that holds the result of a DeleteDocumentEvent
+///
+/// This event is sent after a DeleteDocumentEvent is consumed.
+///
+/// # Examples
+///
+/// Consuming the response event:
+/// ```
+/// fn delete_document_response_event_handler(
+///     mut er: EventReader<DeleteDocumentResponseEvent>,
+/// ) {
+///     for e in er.iter() {
+///         match e.result.clone() {
+///             Ok(result) => {
+///                 println!("Document deleted: {:?}", result);
+///             }
+///             Err(status) => {
+///                 println!("ERROR: Document delete failed: {}", status)
+///             }
+///         }
+///     }
+/// }
 #[derive(Clone)]
 pub struct DeleteDocumentResponseEvent {
     pub result: Result<(), Status>,
@@ -900,7 +1373,22 @@ impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
     }
 }
 
-fn delete_document_event_handler<T, R>(
+/// Listens for events and deletes Firestore documents
+///
+/// Sends a response event after the operation is completed. The delete and
+/// response events are defined as generics.
+///
+/// # Examples
+///
+/// Implementing:
+/// ```
+/// app.add_event::<DeleteDocumentEvent>()
+/// .add_event::<DeleteDocumentResponseEvent>()
+/// .add_system(
+///     delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
+///     .in_set(OnUpdate(FirestoreState::Ready)),
+/// );
+pub fn delete_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
     mut er: EventReader<T>,
@@ -918,8 +1406,6 @@ fn delete_document_event_handler<T, R>(
 
         runtime.spawn_background_task(move |mut ctx| async move {
             let response = async_delete_document(&mut client, &project_id, &document_path).await;
-
-            // TODO DRY
 
             let result = match response {
                 Ok(_) => Ok(()),

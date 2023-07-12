@@ -1,3 +1,5 @@
+// Using events to drive Firestore operations
+
 use std::collections::HashMap;
 
 use bevy::prelude::*;
@@ -16,6 +18,7 @@ enum AppAuthState {
     LogOut,
 }
 
+// Track progress
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
 enum CrudProgress {
     #[default]
@@ -61,10 +64,6 @@ fn main() {
         .add_system(update_document_response_event_handler)
         .add_system(delete_document_response_event_handler)
         .run();
-}
-
-fn firestore_ready(mut next_state: ResMut<NextState<CrudProgress>>) {
-    next_state.set(CrudProgress::Create);
 }
 
 fn input(keys: Res<Input<KeyCode>>, mut next_state: ResMut<NextState<AppAuthState>>) {
@@ -156,6 +155,11 @@ fn delete_document_response_event_handler(
             }
         }
     }
+}
+
+fn firestore_ready(mut next_state: ResMut<NextState<CrudProgress>>) {
+    // Start operations when firestore is ready
+    next_state.set(CrudProgress::Create);
 }
 
 fn create_test_document(mut document_creator: EventWriter<CreateDocumentEvent>) {

@@ -1,3 +1,4 @@
+// Using custom event structs with Firestore
 use std::collections::HashMap;
 
 use bevy::prelude::*;
@@ -15,56 +16,7 @@ enum AppAuthState {
     LogOut,
 }
 
-fn main() {
-    App::new()
-        // Plugins
-        .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase_auth::AuthPlugin {
-            firebase_project_id: "test-auth-rs".into(),
-            ..Default::default()
-        })
-        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
-            emulator_url: Some("http://127.0.0.1:8080".into()),
-        })
-        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
-        // Auth
-        .add_state::<AppAuthState>()
-        .add_system(auth_url_listener)
-        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
-        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
-        // Custom create event listeners
-        .add_event::<CustomCreateDocumentEvent>()
-        .add_event::<CustomCreateDocumentResponseEvent>()
-        .add_system(
-            create_document_event_handler::<
-                CustomCreateDocumentEvent,
-                CustomCreateDocumentResponseEvent,
-            >
-                .in_set(OnUpdate(FirestoreState::Ready)),
-        )
-        .add_system(custom_create_document_response_event_handler)
-        // Test fns
-        .add_system(input)
-        .add_system(create_test_document.in_schedule(OnEnter(FirestoreState::Ready)))
-        .run();
-}
-
-fn input(keys: Res<Input<KeyCode>>, mut next_state: ResMut<NextState<AppAuthState>>) {
-    if keys.just_pressed(KeyCode::I) {
-        next_state.set(AppAuthState::LogIn);
-    }
-
-    if keys.just_pressed(KeyCode::O) {
-        next_state.set(AppAuthState::LogOut);
-    }
-}
-
-fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
-    for e in er.iter() {
-        println!("Go to this URL to sign in:\n{}\n", e.0);
-    }
-}
-
+// Custom event structs + impls
 #[derive(Clone)]
 struct CustomCreateDocumentEvent {
     document_id: String,
@@ -100,6 +52,57 @@ struct CustomCreateDocumentResponseEvent {
 impl CreateDocumentResponseEventBuilder for CustomCreateDocumentResponseEvent {
     fn new(result: DocumentResult, id: usize) -> Self {
         CustomCreateDocumentResponseEvent { result, id }
+    }
+}
+
+fn main() {
+    App::new()
+        // Plugins
+        .add_plugins(DefaultPlugins)
+        .add_plugin(bevy_firebase_auth::AuthPlugin {
+            firebase_project_id: "test-auth-rs".into(),
+            ..Default::default()
+        })
+        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
+            emulator_url: Some("http://127.0.0.1:8080".into()),
+        })
+        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        // Auth
+        .add_state::<AppAuthState>()
+        .add_system(auth_url_listener)
+        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
+        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        // Add custom events
+        .add_event::<CustomCreateDocumentEvent>()
+        .add_event::<CustomCreateDocumentResponseEvent>()
+        // Register handlers for custom events
+        .add_system(
+            create_document_event_handler::<
+                CustomCreateDocumentEvent,
+                CustomCreateDocumentResponseEvent,
+            >
+                .in_set(OnUpdate(FirestoreState::Ready)),
+        )
+        .add_system(custom_create_document_response_event_handler)
+        // Test fns
+        .add_system(input)
+        .add_system(create_test_document.in_schedule(OnEnter(FirestoreState::Ready)))
+        .run();
+}
+
+fn input(keys: Res<Input<KeyCode>>, mut next_state: ResMut<NextState<AppAuthState>>) {
+    if keys.just_pressed(KeyCode::I) {
+        next_state.set(AppAuthState::LogIn);
+    }
+
+    if keys.just_pressed(KeyCode::O) {
+        next_state.set(AppAuthState::LogOut);
+    }
+}
+
+fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
+    for e in er.iter() {
+        println!("Go to this URL to sign in:\n{}\n", e.0);
     }
 }
 
