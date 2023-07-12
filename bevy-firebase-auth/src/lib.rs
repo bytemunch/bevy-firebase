@@ -25,14 +25,17 @@ struct GoogleClientId(String);
 struct GoogleClientSecret(String);
 
 // From plugin
+/// Bevy `Resource` containing the app's Firebase API key
 #[derive(Resource)]
 pub struct ApiKey(String);
 
 // From plugin
+/// Bevy `Resource` containing the app's Firebase Project ID
 #[derive(Resource)]
 pub struct ProjectId(pub String);
 
 // Retrieved
+/// Holds data from a user access token
 #[derive(Deserialize, Resource, Default)]
 pub struct TokenData {
     #[serde(rename = "localId")]
@@ -84,8 +87,20 @@ struct GoogleAuthCode(String);
 struct RedirectPort(u16);
 
 // Event
+/// Event that is sent when an Authorization URL is created
+///
+/// # Examples
+///
+/// Consuming the event:
+/// ```
+/// fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
+///     for e in er.iter() {
+///         println!("Go to this URL to sign in:\n{}\n", e.0);
+///     }
+/// }
 pub struct GotAuthUrl(pub Url);
 
+/// The status of the held access token
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AuthState {
     #[default]
@@ -97,6 +112,23 @@ pub enum AuthState {
     LoggedIn,
 }
 
+/// The Firebase Auth bevy plugin
+///
+/// # Examples
+///
+/// Usage:
+/// ```
+/// app.add_plugin(bevy_firebase_auth::AuthPlugin {
+///     firebase_project_id: "YOUR-PROJECT-ID".into(),
+///     ..Default::default()
+/// });
+/// ```
+/// This retrieves keys saved in data/keys/
+/// - firebase-api.key
+/// - google-client-id.key
+/// - google-client-secret.key
+/// - firebase-refresh.key (OPTIONAL)
+///
 pub struct AuthPlugin {
     pub google_client_id: String,
     pub google_client_secret: String,
@@ -158,6 +190,15 @@ impl Plugin for AuthPlugin {
 
 // designed to be called on user managed state change
 // but ofc can be passed params
+/// Function to log in
+///
+/// Designed to be called on a user managed state change.
+///
+/// # Examples
+///
+/// ```
+/// app.add_state::<AppAuthState>()
+/// .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)));
 pub fn log_in(
     current_state: Res<State<AuthState>>,
     mut next_state: ResMut<NextState<AuthState>>,
@@ -174,6 +215,16 @@ pub fn log_in(
     }
 }
 
+/// Function to log out
+///
+/// Designed to be called on a user managed state change.
+///
+/// # Examples
+///
+/// ```
+/// app.add_state::<AppAuthState>()
+/// .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)));
+/// ```
 pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<NextState<AuthState>>) {
     if current_state.0 == AuthState::LoggedOut {
         return;
@@ -405,6 +456,15 @@ fn refresh_login(
     });
 }
 
+/// Function to delete an account from Firebase
+///
+/// To be triggered with on state change
+///
+/// # Examples
+///
+/// Usage:
+/// ```
+/// app.add_system(delete_account.in_schedule(OnEnter(AppAuthState::Delete)))
 pub fn delete_account(
     token_data: Res<TokenData>,
     firebase_api_key: Res<ApiKey>,
