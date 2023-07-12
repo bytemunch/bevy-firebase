@@ -12,9 +12,9 @@ use bevy_firebase_auth::{
     delete_account, log_in, log_out, AuthState, GotAuthUrl, ProjectId, TokenData,
 };
 use bevy_firebase_firestore::{
-    async_delete_document, async_read_document, value::ValueType, BevyFirestoreClient, Document,
-    DocumentMask, FirestoreState, QueryDirection, QueryResponseEvent, RunQueryEvent,
-    UpdateDocumentEvent, UpdateDocumentRequest, Value,
+    async_delete_document, async_read_document, async_update_document, value::ValueType,
+    BevyFirestoreClient, Document, DocumentMask, FirestoreState, QueryDirection,
+    QueryResponseEvent, RunQueryEvent, UpdateDocumentEvent, UpdateDocumentRequest, Value,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 use util::despawn_with;
@@ -820,9 +820,10 @@ fn update_score(score: Res<Score>, mut q_score_text: Query<&mut Text, With<Score
 fn submit_score_button_system(
     mut q_interaction: Query<(&Interaction,), (Changed<Interaction>, With<SubmitScoreButton>)>,
     score: Res<Score>,
-    mut next_state: ResMut<NextState<AppScreenState>>,
     token_data: Res<TokenData>,
-    mut ew: EventWriter<UpdateDocumentEvent>,
+    runtime: ResMut<TokioTasksRuntime>,
+    client: ResMut<BevyFirestoreClient>,
+    project_id: Res<ProjectId>,
 ) {
     for (interaction,) in &mut q_interaction {
         if *interaction == Interaction::Clicked {
@@ -836,13 +837,21 @@ fn submit_score_button_system(
             );
 
             let document_path = format!("click/{uid}");
+            let mut client = client.0.clone();
+            let project_id = project_id.0.clone();
 
-            ew.send(UpdateDocumentEvent {
-                document_path,
-                document_data,
+            runtime.spawn_background_task(|mut ctx| async move {
+                //
+                let _ =
+                    async_update_document(&mut client, &project_id, &document_path, document_data)
+                        .await;
+
+                ctx.run_on_main_thread(|ctx| {
+                    ctx.world
+                        .insert_resource(NextState(Some(AppScreenState::Leaderboard)));
+                })
+                .await;
             });
-            // TODO await document update THEN change to leaderboard
-            next_state.set(AppScreenState::Leaderboard);
         }
     }
 }
