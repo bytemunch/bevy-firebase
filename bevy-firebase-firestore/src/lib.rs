@@ -587,8 +587,6 @@ pub type DocumentResult = Result<Document, Status>;
 pub type Client = FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>;
 
 // CREATE
-
-// TODO make all of these event driven
 pub trait CreateDocumentEventBuilder {
     fn new(options: Self) -> Self;
     fn document_id(&self) -> String {

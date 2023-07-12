@@ -1,5 +1,3 @@
-Add custom event example
-
 ID in events for filtering responses
 
 Click leaderboard functionality
