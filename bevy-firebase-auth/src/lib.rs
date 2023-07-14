@@ -98,6 +98,7 @@ struct RedirectPort(u16);
 ///         println!("Go to this URL to sign in:\n{}\n", e.0);
 ///     }
 /// }
+#[derive(Event)]
 pub struct GotAuthUrl(pub Url);
 
 /// The status of the held access token
@@ -172,12 +173,12 @@ impl Plugin for AuthPlugin {
             .insert_resource(TokenData::default())
             .add_state::<AuthState>()
             .add_event::<GotAuthUrl>()
-            .add_system(init_login.in_schedule(OnEnter(AuthState::LogIn)))
-            .add_system(auth_code_to_firebase_token.in_schedule(OnEnter(AuthState::GotAuthCode)))
-            .add_system(refresh_login.in_schedule(OnEnter(AuthState::Refreshing)))
-            .add_system(save_refresh_token.in_schedule(OnEnter(AuthState::LoggedIn)))
-            .add_system(login_clear_resources.in_schedule(OnEnter(AuthState::LogOut)))
-            .add_system(logout_clear_resources.in_schedule(OnEnter(AuthState::LogOut)));
+            .add_systems(OnEnter(AuthState::LogIn), init_login)
+            .add_systems(OnEnter(AuthState::GotAuthCode), auth_code_to_firebase_token)
+            .add_systems(OnEnter(AuthState::Refreshing), refresh_login)
+            .add_systems(OnEnter(AuthState::LoggedIn), save_refresh_token)
+            .add_systems(OnEnter(AuthState::LogOut), login_clear_resources)
+            .add_systems(OnEnter(AuthState::LogOut), logout_clear_resources);
 
         if self.firebase_refresh_token.is_some() {
             app.insert_resource(TokenData {
@@ -204,7 +205,7 @@ pub fn log_in(
     mut next_state: ResMut<NextState<AuthState>>,
     token_data: Option<Res<TokenData>>,
 ) {
-    if current_state.0 != AuthState::LoggedOut {
+    if *current_state.get() != AuthState::LoggedOut {
         return;
     }
 
@@ -226,7 +227,7 @@ pub fn log_in(
 /// .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)));
 /// ```
 pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<NextState<AuthState>>) {
-    if current_state.0 == AuthState::LoggedOut {
+    if *current_state.get() == AuthState::LoggedOut {
         return;
     }
 

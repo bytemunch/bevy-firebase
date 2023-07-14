@@ -2,7 +2,7 @@
 
 Google Firebase integration for Bevy.
 
-Currently only implements Auth and a limited subset of Firestore operations.
+Currently only implements Google OAuth2 and a limited subset of Firestore operations.
 
 ## Warnings
 
@@ -21,9 +21,7 @@ Requires `bevy-tokio-tasks` for the tonic crate to work. Removing dependencies i
 
 ## Version Compatibility
 
-Targets Bevy `0.10.1`
-
-`0.11.x` coming soon.
+Targets Bevy `0.11.0`
 
 ## Usage
 
@@ -36,14 +34,14 @@ Create a Firebase project, grab your keys, and feed them to the plugin like so:
         // PLUGINS
         .add_plugins(DefaultPlugins)
         // Dependency for firestore RPC to work
-        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
-        .add_plugin(bevy_firebase_auth::AuthPlugin {
+        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_plugins(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "YOUR-PROJECT-ID".into(),
             google_client_id: "YOUR-CLIENT-ID".into(),
             google_client_secret: "YOUR-CLIENT-SECRET".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase_firestore::FirestorePlugin::default());
+        .add_plugins(bevy_firebase_firestore::FirestorePlugin::default());
 ```
 
 ### Secrets + Keys

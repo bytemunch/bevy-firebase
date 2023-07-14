@@ -6,9 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = "0.10.1"
-bevy_macro_utils = "0.10.1"
-bevy-tokio-tasks = "0.10.2"
+bevy = "0.11.0"
+bevy_macro_utils = "0.11.0"
+bevy-tokio-tasks = "0.11.0"
 open = "5.0.0"
 bevy-firebase-auth = { version = "0.1.0", path = "./bevy-firebase-auth" }
 bevy-firebase-firestore = { version = "0.1.0", path = "./bevy-firebase-firestore" }

@@ -24,22 +24,22 @@ fn main() {
     App::new()
         // Plugins
         .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase_auth::AuthPlugin {
+        .add_plugins(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
+        .add_plugins(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
-        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         // Auth
         .add_state::<AppAuthState>()
-        .add_system(auth_url_listener)
-        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
-        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        .add_systems(Update, auth_url_listener)
+        .add_systems(OnEnter(AppAuthState::LogIn), log_in)
+        .add_systems(OnEnter(AppAuthState::LogOut), log_out)
         // Test fns
-        .add_system(input)
-        .add_system(async_operations.in_schedule(OnEnter(FirestoreState::Ready)))
+        .add_systems(Update, input)
+        .add_systems(OnEnter(FirestoreState::Ready), async_operations)
         .run();
 }
 

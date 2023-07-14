@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 serde = "1.0.164"
-bevy = "0.10.1"
+bevy = "0.11.0"
 url = "2.4.0"
-bevy-tokio-tasks = "0.10.2"
+bevy-tokio-tasks = "0.11.0"
 reqwest = {version = "0.11.18", features = ["json", "multipart"]}

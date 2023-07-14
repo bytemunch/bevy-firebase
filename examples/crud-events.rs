@@ -35,34 +35,34 @@ fn main() {
     App::new()
         // Plugins
         .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase_auth::AuthPlugin {
+        .add_plugins(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
+        .add_plugins(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
-        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         // Auth
         .add_state::<AppAuthState>()
-        .add_system(auth_url_listener)
-        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
-        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        .add_systems(Update, auth_url_listener)
+        .add_systems(OnEnter(AppAuthState::LogIn), log_in)
+        .add_systems(OnEnter(AppAuthState::LogOut), log_out)
         // Test fns
         .add_state::<CrudProgress>()
-        .add_system(input)
-        .add_system(firestore_ready.in_schedule(OnEnter(FirestoreState::Ready)))
-        .add_system(create_test_document.in_schedule(OnEnter(CrudProgress::Create)))
-        .add_system(read_test_document.in_schedule(OnEnter(CrudProgress::Read1)))
-        .add_system(update_test_document.in_schedule(OnEnter(CrudProgress::Update)))
-        .add_system(read_test_document.in_schedule(OnEnter(CrudProgress::Read2)))
-        .add_system(delete_test_document.in_schedule(OnEnter(CrudProgress::Delete)))
-        .add_system(read_test_document.in_schedule(OnEnter(CrudProgress::Read3)))
+        .add_systems(Update, input)
+        .add_systems(OnEnter(FirestoreState::Ready), firestore_ready)
+        .add_systems(OnEnter(CrudProgress::Create), create_test_document)
+        .add_systems(OnEnter(CrudProgress::Read1), read_test_document)
+        .add_systems(OnEnter(CrudProgress::Update), update_test_document)
+        .add_systems(OnEnter(CrudProgress::Read2), read_test_document)
+        .add_systems(OnEnter(CrudProgress::Delete), delete_test_document)
+        .add_systems(OnEnter(CrudProgress::Read3), read_test_document)
         // Response handlers
-        .add_system(create_document_response_event_handler)
-        .add_system(read_document_response_event_handler)
-        .add_system(update_document_response_event_handler)
-        .add_system(delete_document_response_event_handler)
+        .add_systems(Update, create_document_response_event_handler)
+        .add_systems(Update, read_document_response_event_handler)
+        .add_systems(Update, update_document_response_event_handler)
+        .add_systems(Update, delete_document_response_event_handler)
         .run();
 }
 
@@ -109,7 +109,7 @@ fn read_document_response_event_handler(
         match e.result.clone() {
             Ok(result) => {
                 println!("Document read: {:?}", result);
-                match current_state.0 {
+                match current_state.get() {
                     CrudProgress::Read1 => next_state.set(CrudProgress::Update),
                     CrudProgress::Read2 => next_state.set(CrudProgress::Delete),
                     CrudProgress::Read3 => (),

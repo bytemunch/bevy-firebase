@@ -60,64 +60,114 @@ fn main() {
     App::new()
         // PLUGINS
         .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase_auth::AuthPlugin {
+        .add_plugins(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
+        .add_plugins(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
             // emulator_url: None,
         })
-        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         // STATES
         .add_state::<AuthControllerState>()
         .add_state::<AppScreenState>()
         // INIT
-        .add_startup_system(setup)
+        .add_systems(Startup, setup)
         // UTILS
-        .add_system(button_color_system)
-        .add_system(exit_button_system)
+        .add_systems(Update, button_color_system)
+        .add_systems(Update, exit_button_system)
         // LOGIN
-        .add_system(log_in.in_schedule(OnEnter(AuthControllerState::LogIn)))
-        .add_system(log_out.in_schedule(OnEnter(AuthControllerState::LogOut)))
-        .add_system(delete_account.in_schedule(OnEnter(AuthControllerState::Delete)))
-        .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
-        .add_system(firestore_ready.in_schedule(OnEnter(FirestoreState::Ready)))
-        .add_system(logged_out.in_schedule(OnEnter(AuthState::LoggedOut)))
+        .add_systems(OnEnter(AuthControllerState::LogIn), log_in)
+        .add_systems(OnEnter(AuthControllerState::LogOut), log_out)
+        .add_systems(OnEnter(AuthControllerState::Delete), delete_account)
+        .add_systems(OnEnter(AuthState::LoggedIn), logged_in)
+        .add_systems(OnEnter(FirestoreState::Ready), firestore_ready)
+        .add_systems(OnEnter(AuthState::LoggedOut), logged_out)
         // SCREENS
         // login
-        .add_system(build_login_screen.in_schedule(OnEnter(AppScreenState::LogInScreen)))
-        .add_system(
-            despawn_with::<LogInScreenData>.in_schedule(OnExit(AppScreenState::LogInScreen)),
+        .add_systems(OnEnter(AppScreenState::LogInScreen), build_login_screen)
+        .add_systems(
+            OnExit(AppScreenState::LogInScreen),
+            despawn_with::<LogInScreenData>,
         )
-        .add_system(login_button_system.in_set(OnUpdate(AppScreenState::LogInScreen)))
-        .add_system(auth_url_listener.in_set(OnUpdate(AuthControllerState::LogIn)))
+        .add_systems(
+            Update,
+            login_button_system.run_if(in_state(AppScreenState::LogInScreen)),
+        )
+        .add_systems(
+            Update,
+            auth_url_listener.run_if(in_state(AuthControllerState::LogIn)),
+        )
         // menu
-        .add_system(build_main_menu.in_schedule(OnEnter(AppScreenState::MainMenu)))
-        .add_system(despawn_with::<MainMenuData>.in_schedule(OnExit(AppScreenState::MainMenu)))
-        .add_system(play_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(nickname_submit_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(delete_score_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(delete_account_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(logout_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(leaderboard_button_system.in_set(OnUpdate(AppScreenState::MainMenu)))
-        .add_system(update_welcome_text.in_set(OnUpdate(AppScreenState::MainMenu)))
+        .add_systems(OnEnter(AppScreenState::MainMenu), build_main_menu)
+        .add_systems(
+            Update,
+            play_button_system.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            nickname_submit_button_system.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            delete_score_button_system.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            delete_account_button_system.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            logout_button_system.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            leaderboard_button_system.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            update_welcome_text.run_if(in_state(AppScreenState::MainMenu)),
+        )
+        .add_systems(
+            OnExit(AppScreenState::MainMenu),
+            despawn_with::<MainMenuData>,
+        )
         // in game
-        .add_system(build_in_game.in_schedule(OnEnter(AppScreenState::InGame)))
-        .add_system(despawn_with::<InGameData>.in_schedule(OnExit(AppScreenState::InGame)))
-        .add_system(update_score.in_set(OnUpdate(AppScreenState::InGame)))
-        .add_system(score_button_system.in_set(OnUpdate(AppScreenState::InGame)))
-        .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::InGame)))
-        .add_system(submit_score_button_system.in_set(OnUpdate(AppScreenState::InGame)))
+        .add_systems(OnEnter(AppScreenState::InGame), build_in_game)
+        .add_systems(
+            Update,
+            update_score.run_if(in_state(AppScreenState::InGame)),
+        )
+        .add_systems(
+            Update,
+            score_button_system.run_if(in_state(AppScreenState::InGame)),
+        )
+        .add_systems(
+            Update,
+            return_to_menu_button_system.run_if(in_state(AppScreenState::InGame)),
+        )
+        .add_systems(
+            Update,
+            submit_score_button_system.run_if(in_state(AppScreenState::InGame)),
+        )
+        .add_systems(OnExit(AppScreenState::InGame), despawn_with::<InGameData>)
         // leaderboard
         .add_event::<UpdateLeaderboardEvent>()
-        .add_system(build_leaderboard.in_schedule(OnEnter(AppScreenState::Leaderboard)))
-        .add_system(
-            despawn_with::<LeaderboardData>.in_schedule(OnExit(AppScreenState::Leaderboard)),
+        .add_systems(OnEnter(AppScreenState::Leaderboard), build_leaderboard)
+        .add_systems(Update, query_response_event_handler)
+        .add_systems(
+            Update,
+            return_to_menu_button_system.run_if(in_state(AppScreenState::Leaderboard)),
         )
-        .add_system(query_response_event_handler)
-        .add_system(return_to_menu_button_system.in_set(OnUpdate(AppScreenState::Leaderboard)))
-        .add_system(update_leaderboard.in_set(OnUpdate(AppScreenState::Leaderboard)))
+        .add_systems(
+            Update,
+            update_leaderboard.run_if(in_state(AppScreenState::Leaderboard)),
+        )
+        .add_systems(
+            OnExit(AppScreenState::Leaderboard),
+            despawn_with::<LeaderboardData>,
+        )
         .run();
 }
 
@@ -226,7 +276,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     let button = ButtonBundle {
         style: Style {
-            size: Size::new(Val::Px(300.0), Val::Px(65.0)),
+            width: Val::Px(300.),
+            height: Val::Px(65.),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             margin: UiRect {
@@ -242,10 +293,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn(NodeBundle {
             style: Style {
-                size: Size {
-                    height: Val::Percent(100.),
-                    width: Val::Percent(100.),
-                },
+                height: Val::Percent(100.),
+                width: Val::Percent(100.),
                 align_items: AlignItems::Center,
                 flex_direction: FlexDirection::Column,
                 ..default()
@@ -277,7 +326,7 @@ fn button_color_system(
 ) {
     for (interaction, mut color) in &mut q_interaction {
         match *interaction {
-            Interaction::Clicked => {
+            Interaction::Pressed => {
                 *color = PRESSED_BUTTON.into();
             }
             Interaction::Hovered => {
@@ -295,7 +344,7 @@ fn exit_button_system(
     mut exit: EventWriter<AppExit>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             exit.send(AppExit)
         }
     }
@@ -344,7 +393,7 @@ fn login_button_system(
     for (interaction, login_url, children) in &mut q_interaction {
         let mut text = text_query.get_mut(children[0]).unwrap();
 
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             // open URL
             let _ = open::that(login_url.0.clone());
             text.sections[0].value = "waiting for browser...".into();
@@ -605,7 +654,7 @@ fn play_button_system(
     mut next_state: ResMut<NextState<AppScreenState>>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             // Go to in game state
             next_state.set(AppScreenState::InGame)
         }
@@ -626,7 +675,7 @@ fn nickname_submit_button_system(
     let token_data = token_data.unwrap();
 
     if let Ok(nickname_input) = q_nickname_input.get_single() {
-        if let Ok(Interaction::Clicked) = q_interaction.get_single() {
+        if let Ok(Interaction::Pressed) = q_interaction.get_single() {
             nickname.0 = nickname_input.value.clone();
 
             let uid = token_data.local_id.clone();
@@ -658,7 +707,7 @@ fn leaderboard_button_system(
     mut next_state: ResMut<NextState<AppScreenState>>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             next_state.set(AppScreenState::Leaderboard)
         }
     }
@@ -673,7 +722,7 @@ fn delete_score_button_system(
     // TODO early return, tooooo much right shift
     if let Some(token_data) = token_data {
         for (interaction,) in &mut q_interaction {
-            if *interaction == Interaction::Clicked {
+            if *interaction == Interaction::Pressed {
                 score.0 = 0;
 
                 let uid = token_data.local_id.clone();
@@ -702,7 +751,7 @@ fn logout_button_system(
     mut next_state: ResMut<NextState<AuthControllerState>>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             // Go to in game state
             next_state.set(AuthControllerState::LogOut)
         }
@@ -719,7 +768,7 @@ fn delete_account_button_system(
     // TODO right shift fix
     if let Some(token_data) = token_data {
         for (interaction,) in &mut q_interaction {
-            if *interaction == Interaction::Clicked {
+            if *interaction == Interaction::Pressed {
                 let mut client = client.0.clone();
                 let project_id = project_id.0.clone();
                 let uid = token_data.local_id.clone();
@@ -809,7 +858,7 @@ fn score_button_system(
     mut score: ResMut<Score>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             score.0 += 1;
         }
     }
@@ -831,7 +880,7 @@ fn submit_score_button_system(
     project_id: Res<ProjectId>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             let uid = token_data.local_id.clone();
             let mut document_data = HashMap::new();
             document_data.insert(
@@ -866,7 +915,7 @@ fn return_to_menu_button_system(
     mut next_state: ResMut<NextState<AppScreenState>>,
 ) {
     for (interaction,) in &mut q_interaction {
-        if *interaction == Interaction::Clicked {
+        if *interaction == Interaction::Pressed {
             next_state.set(AppScreenState::MainMenu)
         }
     }
@@ -903,10 +952,8 @@ fn build_leaderboard(
             .spawn(NodeBundle {
                 style: Style {
                     flex_direction: FlexDirection::Column,
-                    size: Size {
-                        width: Val::Px(300.),
-                        height: Val::Px(400.),
-                    },
+                    width: Val::Px(300.),
+                    height: Val::Px(400.),
                     ..default()
                 },
                 ..default()
@@ -928,6 +975,7 @@ fn build_leaderboard(
     });
 }
 
+#[derive(Event)]
 struct UpdateLeaderboardEvent {
     responses: Result<Vec<RunQueryResponse>, Status>, // TODO simplify type
 }

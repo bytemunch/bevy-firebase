@@ -17,7 +17,7 @@ enum AppAuthState {
 }
 
 // Custom event structs + impls
-#[derive(Clone)]
+#[derive(Clone, Event)]
 struct CustomCreateDocumentEvent {
     document_id: String,
     collection_id: String,
@@ -43,7 +43,7 @@ impl CreateDocumentEventBuilder for CustomCreateDocumentEvent {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Event)]
 struct CustomCreateDocumentResponseEvent {
     result: DocumentResult,
     id: usize,
@@ -59,34 +59,35 @@ fn main() {
     App::new()
         // Plugins
         .add_plugins(DefaultPlugins)
-        .add_plugin(bevy_firebase_auth::AuthPlugin {
+        .add_plugins(bevy_firebase_auth::AuthPlugin {
             firebase_project_id: "test-auth-rs".into(),
             ..Default::default()
         })
-        .add_plugin(bevy_firebase_firestore::FirestorePlugin {
+        .add_plugins(bevy_firebase_firestore::FirestorePlugin {
             emulator_url: Some("http://127.0.0.1:8080".into()),
         })
-        .add_plugin(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         // Auth
         .add_state::<AppAuthState>()
-        .add_system(auth_url_listener)
-        .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)))
-        .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)))
+        .add_systems(Update, auth_url_listener)
+        .add_systems(OnEnter(AppAuthState::LogIn), log_in)
+        .add_systems(OnEnter(AppAuthState::LogOut), log_out)
         // Add custom events
         .add_event::<CustomCreateDocumentEvent>()
         .add_event::<CustomCreateDocumentResponseEvent>()
         // Register handlers for custom events
-        .add_system(
+        .add_systems(
+            Update,
             create_document_event_handler::<
                 CustomCreateDocumentEvent,
                 CustomCreateDocumentResponseEvent,
             >
-                .in_set(OnUpdate(FirestoreState::Ready)),
+                .run_if(in_state(FirestoreState::Ready)),
         )
-        .add_system(custom_create_document_response_event_handler)
+        .add_systems(Update, custom_create_document_response_event_handler)
         // Test fns
-        .add_system(input)
-        .add_system(create_test_document.in_schedule(OnEnter(FirestoreState::Ready)))
+        .add_systems(Update, input)
+        .add_systems(OnEnter(FirestoreState::Ready), create_test_document)
         .run();
 }
 

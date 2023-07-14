@@ -106,50 +106,56 @@ impl Plugin for FirestorePlugin {
         }
 
         app.add_state::<FirestoreState>()
-            .add_system(logged_in.in_schedule(OnEnter(AuthState::LoggedIn)))
-            .add_system(init.in_schedule(OnEnter(FirestoreState::Init)))
-            .add_system(create_client.in_schedule(OnEnter(FirestoreState::CreateClient)))
+            .add_systems(OnEnter(AuthState::LoggedIn), logged_in)
+            .add_systems(OnEnter(FirestoreState::Init), init)
+            .add_systems(OnEnter(FirestoreState::CreateClient), create_client)
             // LISTENER
             .add_event::<CreateListenerEvent>()
             .add_event::<ListenerResponseEvent>()
-            .add_system(
+            .add_systems(
+                Update,
                 create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
+                    .run_if(in_state(FirestoreState::Ready)),
             )
             // QUERY
             .add_event::<QueryResponseEvent>()
             .add_event::<RunQueryEvent>()
-            .add_system(
+            .add_systems(
+                Update,
                 run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
+                    .run_if(in_state(FirestoreState::Ready)),
             )
             // CREATE
             .add_event::<CreateDocumentEvent>()
             .add_event::<CreateDocumentResponseEvent>()
-            .add_system(
+            .add_systems(
+                Update,
                 create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
+                    .run_if(in_state(FirestoreState::Ready)),
             )
             // UPDATE
             .add_event::<UpdateDocumentEvent>()
             .add_event::<UpdateDocumentResponseEvent>()
-            .add_system(
+            .add_systems(
+                Update,
                 update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
+                    .run_if(in_state(FirestoreState::Ready)),
             )
             // READ
             .add_event::<ReadDocumentEvent>()
             .add_event::<ReadDocumentResponseEvent>()
-            .add_system(
+            .add_systems(
+                Update,
                 read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
+                    .run_if(in_state(FirestoreState::Ready)),
             )
             // DELETE
             .add_event::<DeleteDocumentEvent>()
             .add_event::<DeleteDocumentResponseEvent>()
-            .add_system(
+            .add_systems(
+                Update,
                 delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
-                    .in_set(OnUpdate(FirestoreState::Ready)),
+                    .run_if(in_state(FirestoreState::Ready)),
             );
     }
 }
@@ -295,6 +301,7 @@ pub trait ListenerResponseEventBuilder {
 ///     }
 /// }
 /// ```
+#[derive(Event)]
 pub struct ListenerResponseEvent {
     pub msg: ListenResponse,
 }
@@ -316,7 +323,7 @@ fn add_listener<T>(
     project_id: String,
     target: String,
 ) where
-    T: ListenerResponseEventBuilder + std::marker::Send + std::marker::Sync + 'static,
+    T: ListenerResponseEventBuilder + Event,
 {
     let mut client = client.clone();
 
@@ -382,6 +389,7 @@ pub trait CreateListenerEventBuilder {
 ///         target: document_path,
 ///     });
 /// }
+#[derive(Event)]
 pub struct CreateListenerEvent {
     pub target: String,
 }
@@ -401,7 +409,7 @@ impl CreateListenerEventBuilder for CreateListenerEvent {
 /// app
 ///     .add_event::<CreateListenerEvent>()
 ///     .add_event::<ListenerResponseEvent>()
-///     .add_system(create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
+///     .add_systems(create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
 ///         .in_set(OnUpdate(FirestoreState::Ready)
 ///     ),);
 /// ```
@@ -417,8 +425,8 @@ pub fn create_listener_event_handler<T, R>(
     mut client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
 ) where
-    T: CreateListenerEventBuilder + Send + Sync + 'static,
-    R: ListenerResponseEventBuilder + Send + Sync + 'static,
+    T: CreateListenerEventBuilder + Event,
+    R: ListenerResponseEventBuilder + Event,
 {
     for e in er.iter() {
         add_listener::<R>(
@@ -467,6 +475,7 @@ pub trait QueryResponseEventBuilder {
 ///     }
 /// }
 /// ```
+#[derive(Event)]
 pub struct QueryResponseEvent {
     pub query_response: QueryResponse,
     pub id: usize,
@@ -523,7 +532,7 @@ pub trait RunQueryEventBuilder {
 ///     order_by: ("price", QueryDirection::Ascending),
 ///     id: 1337,
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct RunQueryEvent {
     pub parent: String,
     pub collection_id: String,
@@ -559,7 +568,7 @@ impl RunQueryEventBuilder for RunQueryEvent {
 /// app
 ///     .add_event::<RunQueryEvent>()
 ///     .add_event::<QueryResponseEvent>()
-///     .add_system(run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
+///     .add_systems(run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
 ///         .in_set(OnUpdate(FirestoreState::Ready)
 ///     ),);
 /// ```
@@ -583,8 +592,8 @@ pub fn run_query_event_handler<T, R>(
     mut client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
 ) where
-    T: RunQueryEventBuilder + Send + Sync + 'static,
-    R: QueryResponseEventBuilder + Send + Sync + 'static,
+    T: RunQueryEventBuilder + Event,
+    R: QueryResponseEventBuilder + Event,
 {
     for e in er.iter() {
         run_query::<R>(
@@ -610,7 +619,7 @@ fn run_query<T>(
     order_by: (String, QueryDirection),
     id: usize,
 ) where
-    T: QueryResponseEventBuilder + Send + Sync + 'static,
+    T: QueryResponseEventBuilder + Event,
 {
     let parent = if !parent.is_empty() {
         format!("/{parent}")
@@ -815,7 +824,7 @@ pub trait CreateDocumentEventBuilder {
 ///         id: 0,
 ///     });
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct CreateDocumentEvent {
     pub document_id: String,
     pub collection_id: String,
@@ -876,7 +885,7 @@ pub trait CreateDocumentResponseEventBuilder {
 ///         }
 ///     }
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct CreateDocumentResponseEvent {
     pub result: DocumentResult,
     pub id: usize,
@@ -899,7 +908,7 @@ impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
 /// ```
 /// app.add_event::<CreateDocumentEvent>()
 /// .add_event::<CreateDocumentResponseEvent>()
-/// .add_system(
+/// .add_systems(
 ///     create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
 ///         .in_set(OnUpdate(FirestoreState::Ready)),
 /// );
@@ -909,8 +918,8 @@ pub fn create_document_event_handler<T, R>(
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
 ) where
-    T: CreateDocumentEventBuilder + Send + Sync + 'static + Clone,
-    R: CreateDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+    T: CreateDocumentEventBuilder + Event + Clone,
+    R: CreateDocumentResponseEventBuilder + Event + Clone,
 {
     for e in er.iter() {
         let mut client = client.0.clone();
@@ -996,7 +1005,7 @@ pub trait UpdateDocumentEventBuilder {
 ///         id: 2,
 ///     })
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct UpdateDocumentEvent {
     pub document_path: String,
     pub document_data: HashMap<String, Value>,
@@ -1055,7 +1064,7 @@ pub trait UpdateDocumentResponseEventBuilder {
 ///         }
 ///     }
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct UpdateDocumentResponseEvent {
     pub result: DocumentResult,
     pub id: usize,
@@ -1078,7 +1087,7 @@ impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
 /// ```
 /// app.add_event::<UpdateDocumentEvent>()
 /// .add_event::<UpdateDocumentResponseEvent>()
-/// .add_system(
+/// .add_systems(
 ///     update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
 ///         .in_set(OnUpdate(FirestoreState::Ready)),
 /// );
@@ -1088,8 +1097,8 @@ pub fn update_document_event_handler<T, R>(
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
 ) where
-    T: UpdateDocumentEventBuilder + Send + Sync + 'static + Clone,
-    R: UpdateDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+    T: UpdateDocumentEventBuilder + Event + Clone,
+    R: UpdateDocumentResponseEventBuilder + Event + Clone,
 {
     for e in er.iter() {
         let mut client = client.0.clone();
@@ -1154,7 +1163,7 @@ pub trait ReadDocumentEventBuilder {
 ///         id: 1,
 ///     })
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct ReadDocumentEvent {
     pub document_path: String,
     pub id: usize,
@@ -1207,7 +1216,7 @@ pub trait ReadDocumentResponseEventBuilder {
 ///         }
 ///     }
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct ReadDocumentResponseEvent {
     pub result: DocumentResult,
     pub id: usize,
@@ -1230,7 +1239,7 @@ impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
 /// ```
 /// app.add_event::<ReadDocumentEvent>()
 /// .add_event::<ReadDocumentResponseEvent>()
-/// .add_system(
+/// .add_systems(
 ///     read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
 ///         .in_set(OnUpdate(FirestoreState::Ready)),
 /// )
@@ -1240,8 +1249,8 @@ pub fn read_document_event_handler<T, R>(
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
 ) where
-    T: ReadDocumentEventBuilder + Send + Sync + 'static + Clone,
-    R: ReadDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+    T: ReadDocumentEventBuilder + Event + Clone,
+    R: ReadDocumentResponseEventBuilder + Event + Clone,
 {
     for e in er.iter() {
         let mut client = client.0.clone();
@@ -1305,7 +1314,7 @@ pub trait DeleteDocumentEventBuilder {
 ///         id: 3,
 ///     })
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct DeleteDocumentEvent {
     pub document_path: String,
     pub id: usize,
@@ -1360,7 +1369,7 @@ pub trait DeleteDocumentResponseEventBuilder {
 ///         }
 ///     }
 /// }
-#[derive(Clone)]
+#[derive(Clone, Event)]
 pub struct DeleteDocumentResponseEvent {
     pub result: Result<(), Status>,
     pub id: usize,
@@ -1383,7 +1392,7 @@ impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
 /// ```
 /// app.add_event::<DeleteDocumentEvent>()
 /// .add_event::<DeleteDocumentResponseEvent>()
-/// .add_system(
+/// .add_systems(
 ///     delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
 ///     .in_set(OnUpdate(FirestoreState::Ready)),
 /// );
@@ -1393,8 +1402,8 @@ pub fn delete_document_event_handler<T, R>(
     mut er: EventReader<T>,
     runtime: ResMut<TokioTasksRuntime>,
 ) where
-    T: DeleteDocumentEventBuilder + Send + Sync + 'static + Clone,
-    R: DeleteDocumentResponseEventBuilder + Send + Sync + 'static + Clone,
+    T: DeleteDocumentEventBuilder + Event + Clone,
+    R: DeleteDocumentResponseEventBuilder + Event + Clone,
 {
     for e in er.iter() {
         let mut client = client.0.clone();
