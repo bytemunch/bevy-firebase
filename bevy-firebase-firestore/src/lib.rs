@@ -4,6 +4,8 @@ use std::fs::read_to_string;
 use std::{collections::HashMap, path::PathBuf};
 
 pub use crate::googleapis::google::firestore::v1::*;
+pub use googleapis::google::firestore::v1::structured_query::Direction as QueryDirection;
+pub use tonic::Status;
 
 use bevy::prelude::*;
 
@@ -26,9 +28,6 @@ use tonic::{
     transport::{Certificate, Channel, ClientTlsConfig},
     Request, Response,
 };
-
-pub use googleapis::google::firestore::v1::structured_query::Direction as QueryDirection;
-pub use tonic::Status;
 
 // FIRESTORE
 
