@@ -119,7 +119,7 @@ pub enum AuthState {
 ///
 /// Usage:
 /// ```
-/// app.add_plugin(bevy_firebase_auth::AuthPlugin {
+/// app.add_plugins(bevy_firebase_auth::AuthPlugin {
 ///     firebase_project_id: "YOUR-PROJECT-ID".into(),
 ///     ..Default::default()
 /// });
@@ -199,7 +199,7 @@ impl Plugin for AuthPlugin {
 ///
 /// ```
 /// app.add_state::<AppAuthState>()
-/// .add_system(log_in.in_schedule(OnEnter(AppAuthState::LogIn)));
+/// .add_systems(OnEnter(AppAuthState::LogIn), log_in);
 pub fn log_in(
     current_state: Res<State<AuthState>>,
     mut next_state: ResMut<NextState<AuthState>>,
@@ -224,7 +224,7 @@ pub fn log_in(
 ///
 /// ```
 /// app.add_state::<AppAuthState>()
-/// .add_system(log_out.in_schedule(OnEnter(AppAuthState::LogOut)));
+/// .add_systems(OnEnter(AppAuthState::LogOut) log_out);
 /// ```
 pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<NextState<AuthState>>) {
     if *current_state.get() == AuthState::LoggedOut {
@@ -465,7 +465,7 @@ fn refresh_login(
 ///
 /// Usage:
 /// ```
-/// app.add_system(delete_account.in_schedule(OnEnter(AppAuthState::Delete)))
+/// app.add_systems(OnEnter(AppAuthState::Delete), delete_account)
 pub fn delete_account(
     token_data: Res<TokenData>,
     firebase_api_key: Res<ApiKey>,

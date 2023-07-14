@@ -81,7 +81,7 @@ pub enum FirestoreState {
 /// With emulated Firestore:
 /// ```
 /// App::new()
-///     .add_plugin(FirestorePlugin {
+///     .add_plugins(FirestorePlugin {
 ///         emulator_url: Some("http://127.0.0.1:8080".into()),
 ///     });
 /// ```
@@ -89,7 +89,7 @@ pub enum FirestoreState {
 /// Live Firestore:
 /// ```
 /// App::new()
-///     .add_plugin(FirestorePlugin::default());
+///     .add_plugins(FirestorePlugin::default());
 /// ```
 #[derive(Default)]
 pub struct FirestorePlugin {
@@ -409,8 +409,8 @@ impl CreateListenerEventBuilder for CreateListenerEvent {
 /// app
 ///     .add_event::<CreateListenerEvent>()
 ///     .add_event::<ListenerResponseEvent>()
-///     .add_systems(create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
-///         .in_set(OnUpdate(FirestoreState::Ready)
+///     .add_systems(Update, create_listener_event_handler::<CreateListenerEvent, ListenerResponseEvent>
+///         .run_if(in_state(FirestoreState::Ready)
 ///     ),);
 /// ```
 ///
@@ -568,8 +568,8 @@ impl RunQueryEventBuilder for RunQueryEvent {
 /// app
 ///     .add_event::<RunQueryEvent>()
 ///     .add_event::<QueryResponseEvent>()
-///     .add_systems(run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
-///         .in_set(OnUpdate(FirestoreState::Ready)
+///     .add_systems(Update, run_query_event_handler::<RunQueryEvent, QueryResponseEvent>
+///         .run_if(in_state(FirestoreState::Ready)
 ///     ),);
 /// ```
 ///
@@ -909,8 +909,8 @@ impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
 /// app.add_event::<CreateDocumentEvent>()
 /// .add_event::<CreateDocumentResponseEvent>()
 /// .add_systems(
-///     create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
-///         .in_set(OnUpdate(FirestoreState::Ready)),
+///     Update, create_document_event_handler::<CreateDocumentEvent, CreateDocumentResponseEvent>
+///         .run_if(in_state(FirestoreState::Ready)),
 /// );
 pub fn create_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
@@ -1088,8 +1088,8 @@ impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
 /// app.add_event::<UpdateDocumentEvent>()
 /// .add_event::<UpdateDocumentResponseEvent>()
 /// .add_systems(
-///     update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
-///         .in_set(OnUpdate(FirestoreState::Ready)),
+///     Update, update_document_event_handler::<UpdateDocumentEvent, UpdateDocumentResponseEvent>
+///         .run_if(in_state(FirestoreState::Ready)),
 /// );
 pub fn update_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
@@ -1240,8 +1240,8 @@ impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
 /// app.add_event::<ReadDocumentEvent>()
 /// .add_event::<ReadDocumentResponseEvent>()
 /// .add_systems(
-///     read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
-///         .in_set(OnUpdate(FirestoreState::Ready)),
+///     Update, read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
+///         .run_if(in_state(FirestoreState::Ready)),
 /// )
 pub fn read_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
@@ -1393,8 +1393,8 @@ impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
 /// app.add_event::<DeleteDocumentEvent>()
 /// .add_event::<DeleteDocumentResponseEvent>()
 /// .add_systems(
-///     delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
-///     .in_set(OnUpdate(FirestoreState::Ready)),
+///     Update, delete_document_event_handler::<DeleteDocumentEvent, DeleteDocumentResponseEvent>
+///     .run_if(in_state(FirestoreState::Ready)),
 /// );
 pub fn delete_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
