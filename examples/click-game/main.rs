@@ -3,6 +3,7 @@
 // has login
 // has online leaderboard
 
+mod textbox_plugin;
 mod util;
 
 use std::collections::HashMap;
@@ -18,7 +19,10 @@ use bevy_firebase_firestore::{
     UpdateDocumentRequest, Value,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
+use textbox_plugin::{TextBoxPlugin, TextInput};
 use util::despawn_with;
+
+use crate::textbox_plugin::create_text_box;
 
 // colours
 const NORMAL_BUTTON: Color = Color::rgb(0.15, 0.15, 0.15);
@@ -69,6 +73,7 @@ fn main() {
             // emulator_url: None,
         })
         .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
+        .add_plugins(TextBoxPlugin)
         // STATES
         .add_state::<AuthControllerState>()
         .add_state::<AppScreenState>()
@@ -210,11 +215,6 @@ struct PlayButton;
 
 #[derive(Component)]
 struct NicknameSubmitButton;
-
-#[derive(Component, Clone)]
-struct NicknameInput {
-    value: String,
-}
 
 #[derive(Component)]
 struct DeleteScoreButton;
@@ -568,7 +568,8 @@ fn build_main_menu(
                 parent.spawn(TextBundle::from_section("play", ui.typefaces.p.clone()));
             });
 
-        // TODO: NICKNAME TEXT ENTRY
+        // NICKNAME TEXT ENTRY
+        create_text_box(parent, ui.typefaces.p.font.clone());
 
         // NICKNAME SUBMIT BUTTON
         parent
@@ -633,10 +634,6 @@ fn build_main_menu(
                 parent.spawn(TextBundle::from_section("quit", ui.typefaces.p.clone()));
             });
     });
-
-    commands.spawn_empty().insert(NicknameInput {
-        value: "NewName".into(),
-    }); // value lost on state change? BUG NEEDS-INVESTIGATION
 }
 
 fn update_welcome_text(
@@ -663,9 +660,10 @@ fn play_button_system(
 
 fn nickname_submit_button_system(
     q_interaction: Query<&Interaction, (Changed<Interaction>, With<NicknameSubmitButton>)>,
-    q_nickname_input: Query<&NicknameInput>,
+    q_nickname_input: Query<&Children, With<TextInput>>,
+    q_text: Query<&Text>,
     token_data: Option<Res<TokenData>>,
-    mut nickname: ResMut<Nickname>,
+    mut res_nickname: ResMut<Nickname>,
     mut ew: EventWriter<UpdateDocumentEvent>,
 ) {
     if token_data.is_none() {
@@ -674,18 +672,19 @@ fn nickname_submit_button_system(
 
     let token_data = token_data.unwrap();
 
-    if let Ok(nickname_input) = q_nickname_input.get_single() {
+    if let Ok(children) = q_nickname_input.get_single() {
         if let Ok(Interaction::Pressed) = q_interaction.get_single() {
-            nickname.0 = nickname_input.value.clone();
-
             let uid = token_data.local_id.clone();
-            let nickname = nickname_input.clone();
+
+            let nickname = q_text.get(children[0]).unwrap().sections[0].value.clone();
+
+            res_nickname.0 = nickname.clone();
 
             let mut document_data = HashMap::new();
             document_data.insert(
                 "nickname".to_string(),
                 Value {
-                    value_type: Some(ValueType::StringValue(nickname.value)),
+                    value_type: Some(ValueType::StringValue(nickname)),
                 },
             );
 

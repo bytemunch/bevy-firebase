@@ -30,23 +30,23 @@ Targets Bevy `0.11.0`
 Create a Firebase project, grab your keys, and feed them to the plugin like so:
 
 ```rs
-    App::new()
-        // PLUGINS
-        .add_plugins(DefaultPlugins)
-        // Dependency for firestore RPC to work
-        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
-        .add_plugins(bevy_firebase_auth::AuthPlugin {
-            firebase_project_id: "YOUR-PROJECT-ID".into(),
-            google_client_id: "YOUR-CLIENT-ID".into(),
-            google_client_secret: "YOUR-CLIENT-SECRET".into(),
-            ..Default::default()
-        })
-        .add_plugins(bevy_firebase_firestore::FirestorePlugin::default());
+App::new()
+    // PLUGINS
+    .add_plugins(DefaultPlugins)
+    // Dependency for firestore RPC to work
+    .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
+    .add_plugins(bevy_firebase_auth::AuthPlugin {
+        firebase_project_id: "YOUR-PROJECT-ID".into(),
+        google_client_id: "YOUR-CLIENT-ID".into(),
+        google_client_secret: "YOUR-CLIENT-SECRET".into(),
+        ..Default::default()
+    })
+    .add_plugins(bevy_firebase_firestore::FirestorePlugin::default());
 ```
 
 ### Secrets + Keys
 
-Google likes to put the required keys all over the place, with a couple of steps to set a project up. We'll be bouncing around GCP and Firebase.
+Google likes to put the required keys all over the place, with a couple of steps to set a project up. Here's a little walkthrough to get a hold of everything needed to use the plugins.
 
 #### Creating a Firebase project
 

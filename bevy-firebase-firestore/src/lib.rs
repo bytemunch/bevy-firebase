@@ -609,6 +609,7 @@ pub fn run_query_event_handler<T, R>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_query<T>(
     runtime: &ResMut<TokioTasksRuntime>,
     client: &mut Client,
