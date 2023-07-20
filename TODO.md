@@ -1,11 +1,25 @@
-Click game split into files
+Move firebase files into root project
 
-Readme
+Set up emulator firestore rules
+
+Make repo ready-to-run with only emulators; 
+    Ctrl-F demo project https://firebase.google.com/docs/emulator-suite/connect_auth
 
 Query example
 
 Macro for repeated code in firestore
 
+Tests
+
+Auth: More sign in methods
+
+Click game split into files
+
 Less dependencies
 
-Tests
+Storage
+
+    User uploaded avatars (steal storage rules from drink!)
+        Also steal the downsampling cloud function
+
+PubSub

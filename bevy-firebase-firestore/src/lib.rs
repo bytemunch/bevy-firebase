@@ -97,12 +97,12 @@ pub struct FirestorePlugin {
 }
 
 #[derive(Resource, Clone)]
-struct EmulatorUrl(String);
+struct FirestoreEmulatorUrl(String);
 
 impl Plugin for FirestorePlugin {
     fn build(&self, app: &mut App) {
         if self.emulator_url.is_some() {
-            app.insert_resource(EmulatorUrl(self.emulator_url.clone().unwrap()));
+            app.insert_resource(FirestoreEmulatorUrl(self.emulator_url.clone().unwrap()));
         }
 
         app.add_state::<FirestoreState>()
@@ -173,7 +173,7 @@ fn init(mut next_state: ResMut<NextState<FirestoreState>>) {
 fn create_client(
     runtime: ResMut<TokioTasksRuntime>,
     user_info: Res<TokenData>,
-    emulator: Option<Res<EmulatorUrl>>,
+    emulator: Option<Res<FirestoreEmulatorUrl>>,
     project_id: Res<ProjectId>,
 ) {
     let id_token = user_info.id_token.clone();

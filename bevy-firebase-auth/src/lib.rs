@@ -8,6 +8,7 @@ use std::{
 
 use reqwest::Client;
 use serde::Deserialize;
+use serde_json::Value;
 use url::Url;
 
 use bevy::prelude::*;
@@ -15,6 +16,8 @@ use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 
 // AUTH
+#[derive(Resource, Clone)]
+pub struct AuthEmulatorUrl(String);
 
 // From plugin
 #[derive(Resource)]
@@ -34,9 +37,9 @@ pub struct ApiKey(String);
 #[derive(Resource)]
 pub struct ProjectId(pub String);
 
-// Retrieved
+// TODO trim this down?
 /// Holds data from a user access token
-#[derive(Deserialize, Resource, Default)]
+#[derive(Deserialize, Resource, Default, Debug)]
 pub struct TokenData {
     #[serde(rename = "localId")]
     #[serde(alias = "user_id")]
@@ -136,6 +139,8 @@ pub struct AuthPlugin {
     pub firebase_api_key: String,
     pub firebase_project_id: String,
     pub firebase_refresh_token: Option<String>,
+    /// "http://127.0.0.1:9099"
+    pub emulator_url: Option<String>,
 }
 
 impl Default for AuthPlugin {
@@ -158,6 +163,7 @@ impl Default for AuthPlugin {
             google_client_secret,
             firebase_refresh_token,
             firebase_project_id: "".into(),
+            emulator_url: None,
         }
     }
 }
@@ -185,6 +191,10 @@ impl Plugin for AuthPlugin {
                 refresh_token: self.firebase_refresh_token.clone().unwrap(),
                 ..Default::default()
             });
+        }
+
+        if self.emulator_url.is_some() {
+            app.insert_resource(AuthEmulatorUrl(self.emulator_url.clone().unwrap()));
         }
     }
 }
@@ -338,12 +348,17 @@ fn auth_code_to_firebase_token(
     secret: Res<GoogleClientSecret>,
     client_id: Res<GoogleClientId>,
     api_key: Res<ApiKey>,
+    emulator: Option<Res<AuthEmulatorUrl>>,
 ) {
     let auth_code = auth_code.0.clone();
     let port = format!("{}", port.0);
     let secret = secret.0.clone();
     let client_id = client_id.0.clone();
     let api_key = api_key.0.clone();
+    let root_url = match emulator {
+        Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0),
+        None => "https://identitytoolkit.googleapis.com".into(),
+    };
 
     runtime.spawn_background_task(|mut ctx| async move {
         let client = reqwest::Client::new();
@@ -356,7 +371,7 @@ fn auth_code_to_firebase_token(
 
         #[derive(Deserialize, Debug)]
         struct GoogleTokenResponse {
-            access_token: String,
+            id_token: String,
         }
 
         // Get Google Token
@@ -370,22 +385,25 @@ fn auth_code_to_firebase_token(
             .await
             .unwrap();
 
-        let access_token = google_token.access_token;
+        let id_token = google_token.id_token;
 
-        let mut body = HashMap::new();
+        let mut body: HashMap<String, Value> = HashMap::new();
         body.insert(
-            "postBody",
-            format!("access_token={}&providerId={}", access_token, "google.com"),
+            "postBody".into(),
+            Value::String(format!("id_token={}&providerId={}", id_token, "google.com")),
         );
-        body.insert("requestUri", format!("http://127.0.0.1:{port}"));
-        body.insert("returnIdpCredential", "true".into());
-        body.insert("returnSecureToken", "true".into());
+        body.insert(
+            "requestUri".into(),
+            Value::String(format!("http://127.0.0.1:{port}")),
+        );
+        body.insert("returnIdpCredential".into(), true.into());
+        body.insert("returnSecureToken".into(), true.into());
 
         // Get Firebase Token
         let firebase_token = client
             .post(format!(
-                "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}",
-                api_key
+                "{}/v1/accounts:signInWithIdp?key={}",
+                root_url, api_key
             ))
             .json(&body)
             .send()
@@ -419,18 +437,20 @@ fn refresh_login(
     token_data: Res<TokenData>,
     firebase_api_key: Res<ApiKey>,
     runtime: ResMut<TokioTasksRuntime>,
+    emulator: Option<Res<AuthEmulatorUrl>>,
 ) {
     let refresh_token = token_data.refresh_token.clone();
     let api_key = firebase_api_key.0.clone();
+    let root_url = match emulator {
+        Some(url) => format!("{}/securetoken.googleapis.com", url.0),
+        None => "https://securetoken.googleapis.com".into(),
+    };
 
     runtime.spawn_background_task(|mut ctx| async move {
         let client = Client::new();
 
         let firebase_token = client
-            .post(format!(
-                "https://securetoken.googleapis.com/v1/token?key={}",
-                api_key
-            ))
+            .post(format!("{}/v1/token?key={}", root_url, api_key))
             .header("content-type", "application/x-www-form-urlencoded")
             .body(format!(
                 "grant_type=refresh_token&refresh_token={}",
@@ -470,20 +490,21 @@ pub fn delete_account(
     token_data: Res<TokenData>,
     firebase_api_key: Res<ApiKey>,
     runtime: ResMut<TokioTasksRuntime>,
+    emulator: Option<Res<AuthEmulatorUrl>>,
 ) {
     let api_key = firebase_api_key.0.clone();
     let id_token = token_data.id_token.clone();
-
+    let root_url = match emulator {
+        Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0),
+        None => "https://identitytoolkit.googleapis.com".into(),
+    };
     runtime.spawn_background_task(|mut ctx| async move {
         let client = Client::new();
         let mut body = HashMap::new();
         body.insert("idToken", id_token);
 
         let _res = client
-            .post(format!(
-                "https://identitytoolkit.googleapis.com/v1/accounts:delete?key={}",
-                api_key
-            ))
+            .post(format!("{}/v1/accounts:delete?key={}", root_url, api_key))
             .header("content-type", "application/json")
             .json(&body)
             .send()

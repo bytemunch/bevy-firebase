@@ -6,6 +6,7 @@
 // Selectable text size
 // Macro
 // Find a fully fledged alternative this is a headache :)
+// Just use egui
 
 use bevy::{input::keyboard::KeyboardInput, prelude::*, text::TextLayoutInfo};
 
