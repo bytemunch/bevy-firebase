@@ -1,8 +1,9 @@
+#![allow(clippy::type_complexity)]
+
 // CLICK
 // click button, add to score
 // has login
 // has online leaderboard
-
 mod textbox_plugin;
 mod util;
 
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 
 use bevy::{app::AppExit, prelude::*};
 use bevy_firebase_auth::{
-    delete_account, log_in, log_out, AuthState, GotAuthUrl, ProjectId, TokenData,
+    delete_account, log_in, log_out, AuthState, AuthUrls, ProjectId, TokenData,
 };
 use bevy_firebase_firestore::{
     async_delete_document, async_read_document, async_update_document, value::ValueType,
@@ -311,7 +312,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 }
 
 // UTILS
-
 fn button_color_system(
     mut q_interaction: Query<
         (&Interaction, &mut BackgroundColor),
@@ -398,28 +398,48 @@ fn login_button_system(
 
 fn auth_url_listener(
     mut commands: Commands,
-    mut er: EventReader<GotAuthUrl>,
+    mut er: EventReader<AuthUrls>,
     mut q_ui_base: Query<Entity, With<UiBase>>,
     ui: Res<UiSettings>,
 ) {
     for e in er.iter() {
-        println!("Go to this URL to sign in:\n{}\n", e.0);
+        for auth_url in e.0.iter() {
+            let mut provider_name = "";
+            let mut display_url = "";
+            #[allow(clippy::single_match)] //TODO more matches
+            match auth_url {
+                bevy_firebase_auth::AuthUrl::Google(url) => {
+                    provider_name = "google";
+                    display_url = url.as_str();
+                }
+                bevy_firebase_auth::AuthUrl::GitHub(url) => {
+                    provider_name = "github";
+                    display_url = url.as_str();
+                }
+                _ => (),
+            }
 
-        // add login button
-        let ui_base = q_ui_base.single_mut();
+            println!(
+                "Go to this URL to sign in with {}:\n{}\n",
+                provider_name, display_url
+            );
 
-        commands.entity(ui_base).with_children(|parent| {
-            parent
-                .spawn(ui.button.clone())
-                .insert(LoginButton(e.0.clone().into()))
-                .insert(LogInScreenData)
-                .with_children(|parent| {
-                    parent.spawn(TextBundle::from_section(
-                        "log in with google",
-                        ui.typefaces.p.clone(),
-                    ));
-                });
-        });
+            // add login button
+            let ui_base = q_ui_base.single_mut();
+
+            commands.entity(ui_base).with_children(|parent| {
+                parent
+                    .spawn(ui.button.clone())
+                    .insert(LoginButton(display_url.into()))
+                    .insert(LogInScreenData)
+                    .with_children(|parent| {
+                        parent.spawn(TextBundle::from_section(
+                            format!("log in with {}", provider_name),
+                            ui.typefaces.p.clone(),
+                        ));
+                    });
+            });
+        }
     }
 }
 

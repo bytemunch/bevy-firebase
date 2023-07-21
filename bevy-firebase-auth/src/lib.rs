@@ -15,17 +15,74 @@ use bevy::prelude::*;
 
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-// AUTH
+// Sign In Methods
+// app id, client id, application id, and twitter's api key are all client_id
+// app secret, client secret, application secret, and twitter's api secret are all client_secret
+#[derive(Clone)]
+pub enum SignInMethod {
+    Google {
+        client_id: String,
+        client_secret: String,
+    },
+    GitHub {
+        client_id: String,
+        client_secret: String,
+    },
+    EmailPassword,
+    // TODO
+    Apple,
+    Phone,
+    Anonymous,
+    GooglePlayGames {
+        client_id: String,
+        client_secret: String,
+    },
+    Facebook {
+        client_id: String,
+        client_secret: String,
+    },
+    Twitter {
+        client_id: String,
+        client_secret: String,
+    },
+    Microsoft {
+        client_id: String,
+        client_secret: String,
+    },
+    Yahoo {
+        client_id: String,
+        client_secret: String,
+    },
+}
+
+#[derive(Resource, Clone)]
+pub struct SignInMethods(Vec<SignInMethod>);
+
+#[derive(Debug)]
+pub enum AuthUrl {
+    Google(Url),
+    GitHub(Url),
+    Facebook(Url),
+    Twitter(Url),
+    Microsoft(Url),
+    Yahoo(Url),
+}
+/// Event that is sent when an Authorization URL is created
+///
+/// # Examples
+///
+/// Consuming the event:
+/// ```
+/// fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
+///     for e in er.iter() {
+///         println!("Go to this URL to sign in:\n{}\n", e.0);
+///     }
+/// }
+#[derive(Event, Debug)]
+pub struct AuthUrls(pub Vec<AuthUrl>);
+
 #[derive(Resource, Clone)]
 pub struct AuthEmulatorUrl(String);
-
-// From plugin
-#[derive(Resource)]
-struct GoogleClientId(String);
-
-// From plugin
-#[derive(Resource)]
-struct GoogleClientSecret(String);
 
 // From plugin
 /// Bevy `Resource` containing the app's Firebase API key
@@ -89,21 +146,6 @@ struct GoogleAuthCode(String);
 #[derive(Resource)]
 struct RedirectPort(u16);
 
-// Event
-/// Event that is sent when an Authorization URL is created
-///
-/// # Examples
-///
-/// Consuming the event:
-/// ```
-/// fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
-///     for e in er.iter() {
-///         println!("Go to this URL to sign in:\n{}\n", e.0);
-///     }
-/// }
-#[derive(Event)]
-pub struct GotAuthUrl(pub Url);
-
 /// The status of the held access token
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AuthState {
@@ -134,11 +176,10 @@ pub enum AuthState {
 /// - firebase-refresh.key (OPTIONAL)
 ///
 pub struct AuthPlugin {
-    pub google_client_id: String,
-    pub google_client_secret: String,
     pub firebase_api_key: String,
     pub firebase_project_id: String,
     pub firebase_refresh_token: Option<String>,
+    pub sign_in_methods: SignInMethods,
     /// "http://127.0.0.1:9099"
     pub emulator_url: Option<String>,
 }
@@ -146,24 +187,58 @@ pub struct AuthPlugin {
 impl Default for AuthPlugin {
     fn default() -> Self {
         let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-        let firebase_api_key = read_to_string(data_dir.join("keys/firebase-api.key")).unwrap();
-        let google_client_id = read_to_string(data_dir.join("keys/google-client-id.key")).unwrap();
-        let google_client_secret =
-            read_to_string(data_dir.join("keys/google-client-secret.key")).unwrap();
-        let firebase_refresh_token = read_to_string(data_dir.join("keys/firebase-refresh.key"));
 
-        let firebase_refresh_token = match firebase_refresh_token {
+        let firebase_refresh_token =
+            match read_to_string(data_dir.join("keys/firebase-refresh.key")) {
+                Ok(key) => Some(key),
+                Err(_) => None,
+            };
+
+        let mut sign_in_methods = Vec::new();
+
+        let google_client_id = match read_to_string(data_dir.join("keys/google-client-id.key")) {
             Ok(key) => Some(key),
             Err(_) => None,
         };
 
+        let google_client_secret =
+            match read_to_string(data_dir.join("keys/google-client-secret.key")) {
+                Ok(key) => Some(key),
+                Err(_) => None,
+            };
+
+        if let (Some(client_id), Some(client_secret)) = (google_client_id, google_client_secret) {
+            sign_in_methods.push(SignInMethod::Google {
+                client_id,
+                client_secret,
+            })
+        }
+
+        // TODO reenable this code when differentiation between oAuth code receiving works
+        // let github_client_id = match read_to_string(data_dir.join("keys/github-client-id.key")) {
+        //     Ok(key) => Some(key),
+        //     Err(_) => None,
+        // };
+
+        // let github_client_secret =
+        //     match read_to_string(data_dir.join("keys/github-client-secret.key")) {
+        //         Ok(key) => Some(key),
+        //         Err(_) => None,
+        //     };
+
+        // if let (Some(client_id), Some(client_secret)) = (github_client_id, github_client_secret) {
+        //     sign_in_methods.push(SignInMethod::GitHub {
+        //         client_id,
+        //         client_secret,
+        //     })
+        // }
+
         AuthPlugin {
-            firebase_api_key,
-            google_client_id,
-            google_client_secret,
+            firebase_api_key: "literally anything for emulator".into(),
             firebase_refresh_token,
             firebase_project_id: "demo-bevy".into(),
             emulator_url: Some("http://127.0.0.1:9099".into()),
+            sign_in_methods: SignInMethods(sign_in_methods),
         }
     }
 }
@@ -172,15 +247,17 @@ impl Plugin for AuthPlugin {
     fn build(&self, app: &mut App) {
         // TODO optionally save refresh token to file
 
-        app.insert_resource(GoogleClientId(self.google_client_id.clone()))
-            .insert_resource(GoogleClientSecret(self.google_client_secret.clone()))
-            .insert_resource(ApiKey(self.firebase_api_key.clone()))
+        app.insert_resource(ApiKey(self.firebase_api_key.clone()))
             .insert_resource(ProjectId(self.firebase_project_id.clone()))
             .insert_resource(TokenData::default())
+            .insert_resource(self.sign_in_methods.clone())
             .add_state::<AuthState>()
-            .add_event::<GotAuthUrl>()
+            .add_event::<AuthUrls>()
             .add_systems(OnEnter(AuthState::LogIn), init_login)
-            .add_systems(OnEnter(AuthState::GotAuthCode), auth_code_to_firebase_token)
+            .add_systems(
+                OnEnter(AuthState::GotAuthCode),
+                google_id_token_to_firebase_token,
+            )
             .add_systems(OnEnter(AuthState::Refreshing), refresh_login)
             .add_systems(OnEnter(AuthState::LoggedIn), save_refresh_token)
             .add_systems(OnEnter(AuthState::LogOut), login_clear_resources)
@@ -263,8 +340,8 @@ fn login_clear_resources(mut commands: Commands) {
 
 fn init_login(
     mut commands: Commands,
-    google_client_id: Res<GoogleClientId>,
-    mut ew: EventWriter<GotAuthUrl>,
+    sign_in_methods: Res<SignInMethods>,
+    mut ew: EventWriter<AuthUrls>,
     runtime: ResMut<TokioTasksRuntime>,
 ) {
     // sets up redirect server
@@ -282,25 +359,60 @@ fn init_login(
 
     commands.insert_resource(RedirectPort(port));
 
-    let authorize_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, google_client_id.0)).unwrap();
+    let mut auth_urls = Vec::new();
 
-    ew.send(GotAuthUrl(authorize_url));
+    for keys in sign_in_methods.0.iter() {
+        match keys {
+            SignInMethod::Google {
+                client_id,
+                client_secret: _,
+            } => {
+                let google_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, client_id)).unwrap();
+                auth_urls.push(AuthUrl::Google(google_url));
+            }
+            SignInMethod::GitHub {
+                client_id,
+                client_secret: _,
+            } => {
+                let github_url = Url::parse(&format!("https://github.com/login/oauth/authorize?scope=user:email&redirect_uri=http://127.0.0.1:{}&client_id={}", port, client_id )).unwrap();
+                auth_urls.push(AuthUrl::GitHub(github_url));
+            }
+            SignInMethod::EmailPassword => {}
+            _ => {}
+        }
+    }
+
+    ew.send(AuthUrls(auth_urls));
+
+    // TODO figure out differentiating between providers
+    // Server needs to be spun up and ready before giving user auth URLs
+    //  cos the login can be pretty quick
+    // BUT the stream has no data on where it came from
+    // SO there needs to be another way to discern what oAuth things we're dealing with.
+    // MAYBE when user clicks the provider button set the server up?
+    // Nah, wouldn't work in console.
+    // Set a flag when the user clicks a login button?
+    // But what if they click all of them? Then there would have to be button disabling, and timeout if that login fails....
+    // IF all providers return their code as a `code` param I could sort on the other side?
+    // Only by trying and failing though, that doesn't seem right.
+    // Spawn a server for each provider type? More unnecessary computation locally but could work?
+    // EventReader for AuthUrls, only spawn listeners for URLs we have.
 
     runtime.spawn_background_task(|mut ctx| async move {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
                     {
-                        // pretty much a black box to me
                         let mut reader = BufReader::new(&stream);
                         let mut request_line = String::new();
-                        reader.read_line(&mut request_line).unwrap();
+                        reader.read_line(&mut request_line).unwrap(); // first line of stream is like GET /?code=blahBlBlAh&otherStuff=1 HTTP/1.1
 
-                        let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // idk what this do
-                        let url = Url::parse(&("http://localhost".to_string() + redirect_url));
+                        let redirect_url = request_line.split_whitespace().nth(1).unwrap(); // gets second part of first line of stream, so the path & params
+                        let url = Url::parse(&("http://localhost".to_string() + redirect_url)); // reconstructs a valid URL
 
                         let url = url.unwrap().to_owned();
 
+                        // gets the `code` param from reconstructed url
                         let code_pair = url.query_pairs().find(|pair| {
                             let (key, _) = pair;
                             key == "code"
@@ -309,6 +421,7 @@ fn init_login(
                         if let Some(code_pair) = code_pair {
                             let code = code_pair.1.into_owned();
                             ctx.run_on_main_thread(move |ctx| {
+                                // TODO differentiate between providers here or before
                                 ctx.world.insert_resource(GoogleAuthCode(code));
 
                                 ctx.world
@@ -341,88 +454,98 @@ fn init_login(
     });
 }
 
-fn auth_code_to_firebase_token(
+fn google_id_token_to_firebase_token(
     auth_code: Res<GoogleAuthCode>,
     runtime: ResMut<TokioTasksRuntime>,
     port: Res<RedirectPort>,
-    secret: Res<GoogleClientSecret>,
-    client_id: Res<GoogleClientId>,
     api_key: Res<ApiKey>,
     emulator: Option<Res<AuthEmulatorUrl>>,
+    sign_in_methods: Res<SignInMethods>,
 ) {
-    let auth_code = auth_code.0.clone();
-    let port = format!("{}", port.0);
-    let secret = secret.0.clone();
-    let client_id = client_id.0.clone();
-    let api_key = api_key.0.clone();
-    let root_url = match emulator {
-        Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0),
-        None => "https://identitytoolkit.googleapis.com".into(),
-    };
+    for keys in sign_in_methods.0.iter() {
+        if let SignInMethod::Google {
+            client_id,
+            client_secret,
+        } = keys.clone()
+        {
+            // do stuff
+            let api_key = api_key.0.clone();
 
-    runtime.spawn_background_task(|mut ctx| async move {
-        let client = reqwest::Client::new();
-        let form = reqwest::multipart::Form::new()
-            .text("code", auth_code)
-            .text("client_id", client_id)
-            .text("client_secret", secret)
-            .text("redirect_uri", format!("http://127.0.0.1:{port}"))
-            .text("grant_type", "authorization_code");
+            let auth_code = auth_code.0.clone();
+            let port = format!("{}", port.0);
 
-        #[derive(Deserialize, Debug)]
-        struct GoogleTokenResponse {
-            id_token: String,
+            let root_url = match emulator {
+                Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0.clone()),
+                None => "https://identitytoolkit.googleapis.com".into(),
+            };
+
+            runtime.spawn_background_task(|mut ctx| async move {
+                let client = reqwest::Client::new();
+                let form = reqwest::multipart::Form::new()
+                    .text("code", auth_code)
+                    .text("client_id", client_id)
+                    .text("client_secret", client_secret)
+                    .text("redirect_uri", format!("http://127.0.0.1:{port}"))
+                    .text("grant_type", "authorization_code");
+
+                #[derive(Deserialize, Debug)]
+                struct GoogleTokenResponse {
+                    id_token: String,
+                }
+
+                // Get Google Token
+                let google_token = client
+                    .post("https://www.googleapis.com/oauth2/v3/token")
+                    .multipart(form)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<GoogleTokenResponse>()
+                    .await
+                    .unwrap();
+
+                let id_token = google_token.id_token;
+
+                let mut body: HashMap<String, Value> = HashMap::new();
+                body.insert(
+                    "postBody".into(),
+                    Value::String(format!("id_token={}&providerId={}", id_token, "google.com")),
+                );
+                body.insert(
+                    "requestUri".into(),
+                    Value::String(format!("http://127.0.0.1:{port}")),
+                );
+                body.insert("returnIdpCredential".into(), true.into());
+                body.insert("returnSecureToken".into(), true.into());
+
+                // Get Firebase Token
+                let firebase_token = client
+                    .post(format!(
+                        "{}/v1/accounts:signInWithIdp?key={}",
+                        root_url, api_key
+                    ))
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<TokenData>()
+                    .await
+                    .unwrap();
+
+                // Use Firebase Token TODO pull into fn?
+                ctx.run_on_main_thread(move |ctx| {
+                    ctx.world.insert_resource(firebase_token);
+
+                    // Set next state
+                    ctx.world
+                        .insert_resource(NextState(Some(AuthState::LoggedIn)));
+                })
+                .await;
+            });
+
+            break;
         }
-
-        // Get Google Token
-        let google_token = client
-            .post("https://www.googleapis.com/oauth2/v3/token")
-            .multipart(form)
-            .send()
-            .await
-            .unwrap()
-            .json::<GoogleTokenResponse>()
-            .await
-            .unwrap();
-
-        let id_token = google_token.id_token;
-
-        let mut body: HashMap<String, Value> = HashMap::new();
-        body.insert(
-            "postBody".into(),
-            Value::String(format!("id_token={}&providerId={}", id_token, "google.com")),
-        );
-        body.insert(
-            "requestUri".into(),
-            Value::String(format!("http://127.0.0.1:{port}")),
-        );
-        body.insert("returnIdpCredential".into(), true.into());
-        body.insert("returnSecureToken".into(), true.into());
-
-        // Get Firebase Token
-        let firebase_token = client
-            .post(format!(
-                "{}/v1/accounts:signInWithIdp?key={}",
-                root_url, api_key
-            ))
-            .json(&body)
-            .send()
-            .await
-            .unwrap()
-            .json::<TokenData>()
-            .await
-            .unwrap();
-
-        // Use Firebase Token TODO pull into fn?
-        ctx.run_on_main_thread(move |ctx| {
-            ctx.world.insert_resource(firebase_token);
-
-            // Set next state
-            ctx.world
-                .insert_resource(NextState(Some(AuthState::LoggedIn)));
-        })
-        .await;
-    });
+    }
 }
 
 fn save_refresh_token(token_data: Res<TokenData>) {

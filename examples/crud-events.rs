@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_firebase_auth::{log_in, log_out, GotAuthUrl};
+use bevy_firebase_auth::{log_in, log_out, AuthUrls};
 use bevy_firebase_firestore::{
     value::ValueType, CreateDocumentEvent, CreateDocumentResponseEvent, DeleteDocumentEvent,
     DeleteDocumentResponseEvent, FirestoreState, ReadDocumentEvent, ReadDocumentResponseEvent,
@@ -71,9 +71,29 @@ fn input(keys: Res<Input<KeyCode>>, mut next_state: ResMut<NextState<AppAuthStat
     }
 }
 
-fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
+fn auth_url_listener(mut er: EventReader<AuthUrls>) {
     for e in er.iter() {
-        println!("Go to this URL to sign in:\n{}\n", e.0);
+        for auth_url in e.0.iter() {
+            let mut provider_name = "";
+            let mut display_url = "";
+            #[allow(clippy::single_match)] //TODO more matches
+            match auth_url {
+                bevy_firebase_auth::AuthUrl::Google(url) => {
+                    provider_name = "google";
+                    display_url = url.as_str();
+                }
+                bevy_firebase_auth::AuthUrl::GitHub(url) => {
+                    provider_name = "github";
+                    display_url = url.as_str();
+                }
+                _ => (),
+            }
+
+            println!(
+                "Go to this URL to sign in with {}:\n{}\n",
+                provider_name, display_url
+            );
+        }
     }
 }
 
