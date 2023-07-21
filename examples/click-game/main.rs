@@ -65,7 +65,7 @@ fn main() {
         // PLUGINS
         .add_plugins(DefaultPlugins)
         .add_plugins(bevy_firebase_auth::AuthPlugin {
-            firebase_project_id: "test-auth-rs".into(),
+            firebase_project_id: "demo-bevy".into(),
             emulator_url: Some("http://127.0.0.1:9099".into()),
             ..Default::default()
         })

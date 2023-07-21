@@ -1,9 +1,4 @@
-Move firebase files into root project
-
-Set up emulator firestore rules
-
-Make repo ready-to-run with only emulators; 
-    Ctrl-F demo project https://firebase.google.com/docs/emulator-suite/connect_auth
+Emulator by default
 
 Query example
 

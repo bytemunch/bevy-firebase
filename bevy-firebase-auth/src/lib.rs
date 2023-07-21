@@ -464,6 +464,7 @@ fn refresh_login(
             .unwrap();
 
         // TODO handle errors here, panic prevents login button being generated
+        // TODO if login fails here, delete saved refresh key and break
 
         // Use Firebase Token
         ctx.run_on_main_thread(move |ctx| {

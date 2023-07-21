@@ -60,7 +60,7 @@ fn main() {
         // Plugins
         .add_plugins(DefaultPlugins)
         .add_plugins(bevy_firebase_auth::AuthPlugin {
-            firebase_project_id: "test-auth-rs".into(),
+            firebase_project_id: "demo-bevy".into(),
             ..Default::default()
         })
         .add_plugins(bevy_firebase_firestore::FirestorePlugin {
