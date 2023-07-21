@@ -1,5 +1,3 @@
-Emulator by default
-
 Query example
 
 Macro for repeated code in firestore

@@ -81,19 +81,26 @@ pub enum FirestoreState {
 /// With emulated Firestore:
 /// ```
 /// App::new()
-///     .add_plugins(FirestorePlugin {
-///         emulator_url: Some("http://127.0.0.1:8080".into()),
-///     });
+///     .add_plugins(FirestorePlugin::default());
 /// ```
 ///
 /// Live Firestore:
 /// ```
 /// App::new()
-///     .add_plugins(FirestorePlugin::default());
+///     .add_plugins(FirestorePlugin {
+///         emulator_url: None,
+///     });
 /// ```
-#[derive(Default)]
 pub struct FirestorePlugin {
     pub emulator_url: Option<String>,
+}
+
+impl Default for FirestorePlugin {
+    fn default() -> Self {
+        FirestorePlugin {
+            emulator_url: Some("http://127.0.0.1:8080".into()),
+        }
+    }
 }
 
 #[derive(Resource, Clone)]

@@ -35,13 +35,8 @@ fn main() {
     App::new()
         // Plugins
         .add_plugins(DefaultPlugins)
-        .add_plugins(bevy_firebase_auth::AuthPlugin {
-            firebase_project_id: "demo-bevy".into(),
-            ..Default::default()
-        })
-        .add_plugins(bevy_firebase_firestore::FirestorePlugin {
-            emulator_url: Some("http://127.0.0.1:8080".into()),
-        })
+        .add_plugins(bevy_firebase_auth::AuthPlugin::default())
+        .add_plugins(bevy_firebase_firestore::FirestorePlugin::default())
         .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         // Auth
         .add_state::<AppAuthState>()

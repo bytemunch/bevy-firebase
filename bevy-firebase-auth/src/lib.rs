@@ -162,8 +162,8 @@ impl Default for AuthPlugin {
             google_client_id,
             google_client_secret,
             firebase_refresh_token,
-            firebase_project_id: "".into(),
-            emulator_url: None,
+            firebase_project_id: "demo-bevy".into(),
+            emulator_url: Some("http://127.0.0.1:9099".into()),
         }
     }
 }
