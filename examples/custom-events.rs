@@ -107,7 +107,7 @@ fn auth_url_listener(mut er: EventReader<AuthUrls>) {
                     provider_name = "google";
                     display_url = url.as_str();
                 }
-                bevy_firebase_auth::AuthUrl::GitHub(url) => {
+                bevy_firebase_auth::AuthUrl::Github(url) => {
                     provider_name = "github";
                     display_url = url.as_str();
                 }

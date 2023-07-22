@@ -11,7 +11,8 @@ use std::collections::HashMap;
 
 use bevy::{app::AppExit, prelude::*};
 use bevy_firebase_auth::{
-    delete_account, log_in, log_out, AuthState, AuthUrls, ProjectId, TokenData,
+    delete_account, log_in, log_out, AuthState, AuthUrls, ProjectId, SelectedProvider,
+    SignInMethod, SignInMethods, TokenData,
 };
 use bevy_firebase_firestore::{
     async_delete_document, async_read_document, async_update_document, value::ValueType,
@@ -192,7 +193,7 @@ struct UiBase;
 // LOGIN
 
 #[derive(Component)]
-struct LoginButton(String);
+struct LoginButton((String, String));
 
 #[derive(Component)]
 struct ExitButton;
@@ -383,13 +384,29 @@ fn login_button_system(
         (Changed<Interaction>, With<LoginButton>),
     >,
     mut text_query: Query<&mut Text>,
+    mut commands: Commands,
 ) {
     for (interaction, login_url, children) in &mut q_interaction {
         let mut text = text_query.get_mut(children[0]).unwrap();
 
         if *interaction == Interaction::Pressed {
+            // Set selected provider
+            match login_url.0 .0.as_str() {
+                "Google" => {
+                    commands.insert_resource(SelectedProvider(
+                        bevy_firebase_auth::AuthCode::Google("".into()),
+                    ));
+                }
+                "Github" => {
+                    commands.insert_resource(SelectedProvider(
+                        bevy_firebase_auth::AuthCode::Github("".into()),
+                    ));
+                }
+                _ => (),
+            }
+
             // open URL
-            let _ = open::that(login_url.0.clone());
+            let _ = open::that(login_url.0 .1.clone());
             text.sections[0].value = "waiting for browser...".into();
             // TODO display this text separately, allow users to close tab and try again
         }
@@ -409,11 +426,11 @@ fn auth_url_listener(
             #[allow(clippy::single_match)] //TODO more matches
             match auth_url {
                 bevy_firebase_auth::AuthUrl::Google(url) => {
-                    provider_name = "google";
+                    provider_name = "Google";
                     display_url = url.as_str();
                 }
-                bevy_firebase_auth::AuthUrl::GitHub(url) => {
-                    provider_name = "github";
+                bevy_firebase_auth::AuthUrl::Github(url) => {
+                    provider_name = "Github";
                     display_url = url.as_str();
                 }
                 _ => (),
@@ -430,7 +447,7 @@ fn auth_url_listener(
             commands.entity(ui_base).with_children(|parent| {
                 parent
                     .spawn(ui.button.clone())
-                    .insert(LoginButton(display_url.into()))
+                    .insert(LoginButton((provider_name.into(), display_url.into())))
                     .insert(LogInScreenData)
                     .with_children(|parent| {
                         parent.spawn(TextBundle::from_section(

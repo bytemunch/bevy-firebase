@@ -15,6 +15,7 @@ use bevy::prelude::*;
 
 use bevy_tokio_tasks::TokioTasksRuntime;
 
+// TODO clean up repetitive enums; Provider enum, tuple structs for different use cases
 // Sign In Methods
 // app id, client id, application id, and twitter's api key are all client_id
 // app secret, client secret, application secret, and twitter's api secret are all client_secret
@@ -24,7 +25,7 @@ pub enum SignInMethod {
         client_id: String,
         client_secret: String,
     },
-    GitHub {
+    Github {
         client_id: String,
         client_secret: String,
     },
@@ -61,12 +62,13 @@ pub struct SignInMethods(Vec<SignInMethod>);
 #[derive(Debug)]
 pub enum AuthUrl {
     Google(Url),
-    GitHub(Url),
+    Github(Url),
     Facebook(Url),
     Twitter(Url),
     Microsoft(Url),
     Yahoo(Url),
 }
+
 /// Event that is sent when an Authorization URL is created
 ///
 /// # Examples
@@ -80,6 +82,22 @@ pub enum AuthUrl {
 /// }
 #[derive(Event, Debug)]
 pub struct AuthUrls(pub Vec<AuthUrl>);
+
+#[derive(Debug, Clone)]
+pub enum AuthCode {
+    Google(String),
+    Github(String),
+    Facebook(String),
+    Twitter(String),
+    Microsoft(String),
+    Yahoo(String),
+}
+
+#[derive(Event, Debug)]
+pub struct AuthCodeEvent(AuthCode);
+
+#[derive(Event, Resource)]
+pub struct SelectedProvider(pub AuthCode);
 
 #[derive(Resource, Clone)]
 pub struct AuthEmulatorUrl(String);
@@ -137,10 +155,6 @@ pub struct TokenData {
 // Retrieved
 #[derive(Resource)]
 struct GoogleToken(String);
-
-// Retrieved
-#[derive(Resource)]
-struct GoogleAuthCode(String);
 
 // Generated
 #[derive(Resource)]
@@ -227,7 +241,7 @@ impl Default for AuthPlugin {
         //     };
 
         // if let (Some(client_id), Some(client_secret)) = (github_client_id, github_client_secret) {
-        //     sign_in_methods.push(SignInMethod::GitHub {
+        //     sign_in_methods.push(SignInMethod::Github {
         //         client_id,
         //         client_secret,
         //     })
@@ -253,6 +267,7 @@ impl Plugin for AuthPlugin {
             .insert_resource(self.sign_in_methods.clone())
             .add_state::<AuthState>()
             .add_event::<AuthUrls>()
+            .add_event::<AuthCodeEvent>()
             .add_systems(OnEnter(AuthState::LogIn), init_login)
             .add_systems(
                 OnEnter(AuthState::GotAuthCode),
@@ -335,7 +350,6 @@ fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextSta
 fn login_clear_resources(mut commands: Commands) {
     commands.remove_resource::<RedirectPort>();
     commands.remove_resource::<GoogleToken>();
-    commands.remove_resource::<GoogleAuthCode>();
 }
 
 fn init_login(
@@ -370,12 +384,12 @@ fn init_login(
                 let google_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, client_id)).unwrap();
                 auth_urls.push(AuthUrl::Google(google_url));
             }
-            SignInMethod::GitHub {
+            SignInMethod::Github {
                 client_id,
                 client_secret: _,
             } => {
                 let github_url = Url::parse(&format!("https://github.com/login/oauth/authorize?scope=user:email&redirect_uri=http://127.0.0.1:{}&client_id={}", port, client_id )).unwrap();
-                auth_urls.push(AuthUrl::GitHub(github_url));
+                auth_urls.push(AuthUrl::Github(github_url));
             }
             SignInMethod::EmailPassword => {}
             _ => {}
@@ -394,12 +408,16 @@ fn init_login(
     // Set a flag when the user clicks a login button?
     // But what if they click all of them? Then there would have to be button disabling, and timeout if that login fails....
     // IF all providers return their code as a `code` param I could sort on the other side?
-    // Only by trying and failing though, that doesn't seem right.
+    // Only by trying all oauth servers and failing though, that doesn't seem right.
     // Spawn a server for each provider type? More unnecessary computation locally but could work?
     // EventReader for AuthUrls, only spawn listeners for URLs we have.
+    // Nope, the URLs need to have ports in them
+    // Hmmmmmmmm
+    // Looks like it's a flag system. User clicks login, disable all login buttons and wait for response. Cancel button the get back to login page that kills the listener.
 
     runtime.spawn_background_task(|mut ctx| async move {
         for stream in listener.incoming() {
+            // TODO extract this to function?
             match stream {
                 Ok(mut stream) => {
                     {
@@ -422,7 +440,25 @@ fn init_login(
                             let code = code_pair.1.into_owned();
                             ctx.run_on_main_thread(move |ctx| {
                                 // TODO differentiate between providers here or before
-                                ctx.world.insert_resource(GoogleAuthCode(code));
+
+                                // Grab provider flag resource from world
+                                let selected_provider =
+                                    ctx.world.get_resource::<SelectedProvider>();
+
+                                if let Some(selected_provider) = selected_provider {
+                                    // Match on provider flag
+                                    match selected_provider.0.clone() {
+                                        AuthCode::Google(_) => {
+                                            ctx.world
+                                                .send_event(AuthCodeEvent(AuthCode::Google(code)));
+                                        }
+                                        AuthCode::Github(_) => {
+                                            ctx.world
+                                                .send_event(AuthCodeEvent(AuthCode::Github(code)));
+                                        }
+                                        _ => panic!("NO SELECTED PROVIDER"),
+                                    }
+                                }
 
                                 ctx.world
                                     .insert_resource(NextState(Some(AuthState::GotAuthCode)));
@@ -454,96 +490,107 @@ fn init_login(
     });
 }
 
+// TODO version of this for each provider?
+// OR return correct struct type per provider
+// Mutate return object into common form?
+// Could do all that with serde macros, renaming and stuff, make every field optional
 fn google_id_token_to_firebase_token(
-    auth_code: Res<GoogleAuthCode>,
+    mut auth_code_event_reader: EventReader<AuthCodeEvent>,
     runtime: ResMut<TokioTasksRuntime>,
     port: Res<RedirectPort>,
     api_key: Res<ApiKey>,
     emulator: Option<Res<AuthEmulatorUrl>>,
     sign_in_methods: Res<SignInMethods>,
 ) {
-    for keys in sign_in_methods.0.iter() {
-        if let SignInMethod::Google {
-            client_id,
-            client_secret,
-        } = keys.clone()
-        {
-            // do stuff
-            let api_key = api_key.0.clone();
+    let root_url = match emulator {
+        Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0.clone()),
+        None => "https://identitytoolkit.googleapis.com".into(),
+    };
 
-            let auth_code = auth_code.0.clone();
-            let port = format!("{}", port.0);
+    for auth_code_event in auth_code_event_reader.iter() {
+        if let AuthCode::Google(auth_code) = auth_code_event.0.clone() {
+            // TODO invert logic, early return
+            for keys in sign_in_methods.0.iter() {
+                if let SignInMethod::Google {
+                    client_id,
+                    client_secret,
+                } = keys.clone()
+                {
+                    let api_key = api_key.0.clone();
+                    let port = format!("{}", port.0);
+                    let auth_code = auth_code.clone();
+                    let root_url = root_url.clone();
 
-            let root_url = match emulator {
-                Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0.clone()),
-                None => "https://identitytoolkit.googleapis.com".into(),
-            };
+                    runtime.spawn_background_task(|mut ctx| async move {
+                        let client = reqwest::Client::new();
+                        let form = reqwest::multipart::Form::new()
+                            .text("code", auth_code)
+                            .text("client_id", client_id)
+                            .text("client_secret", client_secret)
+                            .text("redirect_uri", format!("http://127.0.0.1:{port}"))
+                            .text("grant_type", "authorization_code");
 
-            runtime.spawn_background_task(|mut ctx| async move {
-                let client = reqwest::Client::new();
-                let form = reqwest::multipart::Form::new()
-                    .text("code", auth_code)
-                    .text("client_id", client_id)
-                    .text("client_secret", client_secret)
-                    .text("redirect_uri", format!("http://127.0.0.1:{port}"))
-                    .text("grant_type", "authorization_code");
+                        #[derive(Deserialize, Debug)]
+                        struct GoogleTokenResponse {
+                            id_token: String,
+                        }
 
-                #[derive(Deserialize, Debug)]
-                struct GoogleTokenResponse {
-                    id_token: String,
+                        // Get Google Token
+                        let google_token = client
+                            .post("https://www.googleapis.com/oauth2/v3/token")
+                            .multipart(form)
+                            .send()
+                            .await
+                            .unwrap()
+                            .json::<GoogleTokenResponse>()
+                            .await
+                            .unwrap();
+
+                        let id_token = google_token.id_token;
+
+                        let mut body: HashMap<String, Value> = HashMap::new();
+                        body.insert(
+                            "postBody".into(),
+                            Value::String(format!(
+                                "id_token={}&providerId={}",
+                                id_token, "google.com"
+                            )),
+                        );
+                        body.insert(
+                            "requestUri".into(),
+                            Value::String(format!("http://127.0.0.1:{port}")),
+                        );
+                        body.insert("returnIdpCredential".into(), true.into());
+                        body.insert("returnSecureToken".into(), true.into());
+
+                        // Get Firebase Token
+                        let firebase_token = client
+                            .post(format!(
+                                "{}/v1/accounts:signInWithIdp?key={}",
+                                root_url, api_key
+                            ))
+                            .json(&body)
+                            .send()
+                            .await
+                            .unwrap()
+                            .json::<TokenData>()
+                            .await
+                            .unwrap();
+
+                        // Use Firebase Token TODO pull into fn?
+                        ctx.run_on_main_thread(move |ctx| {
+                            ctx.world.insert_resource(firebase_token);
+
+                            // Set next state
+                            ctx.world
+                                .insert_resource(NextState(Some(AuthState::LoggedIn)));
+                        })
+                        .await;
+                    });
+
+                    break;
                 }
-
-                // Get Google Token
-                let google_token = client
-                    .post("https://www.googleapis.com/oauth2/v3/token")
-                    .multipart(form)
-                    .send()
-                    .await
-                    .unwrap()
-                    .json::<GoogleTokenResponse>()
-                    .await
-                    .unwrap();
-
-                let id_token = google_token.id_token;
-
-                let mut body: HashMap<String, Value> = HashMap::new();
-                body.insert(
-                    "postBody".into(),
-                    Value::String(format!("id_token={}&providerId={}", id_token, "google.com")),
-                );
-                body.insert(
-                    "requestUri".into(),
-                    Value::String(format!("http://127.0.0.1:{port}")),
-                );
-                body.insert("returnIdpCredential".into(), true.into());
-                body.insert("returnSecureToken".into(), true.into());
-
-                // Get Firebase Token
-                let firebase_token = client
-                    .post(format!(
-                        "{}/v1/accounts:signInWithIdp?key={}",
-                        root_url, api_key
-                    ))
-                    .json(&body)
-                    .send()
-                    .await
-                    .unwrap()
-                    .json::<TokenData>()
-                    .await
-                    .unwrap();
-
-                // Use Firebase Token TODO pull into fn?
-                ctx.run_on_main_thread(move |ctx| {
-                    ctx.world.insert_resource(firebase_token);
-
-                    // Set next state
-                    ctx.world
-                        .insert_resource(NextState(Some(AuthState::LoggedIn)));
-                })
-                .await;
-            });
-
-            break;
+            }
         }
     }
 }
