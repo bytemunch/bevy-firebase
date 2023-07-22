@@ -21,10 +21,10 @@ use bevy_firebase_firestore::{
     UpdateDocumentRequest, Value,
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
-use textbox_plugin::{TextBoxPlugin, TextInput};
+use textbox_plugin::TextBoxPlugin;
 use util::despawn_with;
 
-use crate::textbox_plugin::create_text_box;
+use crate::textbox_plugin::TextBoxBundle;
 
 // colours
 const NORMAL_BUTTON: Color = Color::rgb(0.15, 0.15, 0.15);
@@ -208,6 +208,9 @@ struct LogoutButton;
 
 #[derive(Component)]
 struct PlayButton;
+
+#[derive(Component)]
+struct NicknameInput;
 
 #[derive(Component)]
 struct NicknameSubmitButton;
@@ -595,7 +598,32 @@ fn build_main_menu(
             });
 
         // NICKNAME TEXT ENTRY
-        create_text_box(parent, ui.typefaces.p.font.clone());
+        parent
+            .spawn(TextBoxBundle {
+                text: Text {
+                    sections: vec![TextSection {
+                        value: "".into(),
+                        style: TextStyle {
+                            font: ui.typefaces.h2.font.clone(),
+                            font_size: 32.,
+                            color: Color::BLACK,
+                        },
+                    }],
+                    ..default()
+                },
+                style: Style {
+                    width: Val::Px(300.),
+                    height: Val::Px(36.),
+                    margin: UiRect {
+                        top: Val::Px(10.),
+                        ..Default::default()
+                    },
+                    ..default()
+                },
+                ..default()
+            })
+            .insert(MainMenuData)
+            .insert(NicknameInput);
 
         // NICKNAME SUBMIT BUTTON
         parent
@@ -686,8 +714,7 @@ fn play_button_system(
 
 fn nickname_submit_button_system(
     q_interaction: Query<&Interaction, (Changed<Interaction>, With<NicknameSubmitButton>)>,
-    q_nickname_input: Query<&Children, With<TextInput>>,
-    q_text: Query<&Text>,
+    q_nickname_input: Query<&Text, With<NicknameInput>>,
     token_data: Option<Res<TokenData>>,
     mut res_nickname: ResMut<Nickname>,
     mut ew: EventWriter<UpdateDocumentEvent>,
@@ -698,11 +725,11 @@ fn nickname_submit_button_system(
 
     let token_data = token_data.unwrap();
 
-    if let Ok(children) = q_nickname_input.get_single() {
+    if let Ok(text) = q_nickname_input.get_single() {
         if let Ok(Interaction::Pressed) = q_interaction.get_single() {
             let uid = token_data.local_id.clone();
 
-            let nickname = q_text.get(children[0]).unwrap().sections[0].value.clone();
+            let nickname = text.sections[0].value.clone();
 
             res_nickname.0 = nickname.clone();
 

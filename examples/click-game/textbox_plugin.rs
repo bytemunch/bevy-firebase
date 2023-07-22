@@ -1,16 +1,9 @@
-//! Quick and very very dirty text input plugin. I don't like any of it.
-
-// TODO
-// Text align selection
-// Max chars
-// Selectable text size
-// Macro
-// Find a fully fledged alternative this is a headache :)
-// Just use egui
-
-use bevy::{input::keyboard::KeyboardInput, prelude::*, text::TextLayoutInfo};
-
-use crate::MainMenuData;
+use bevy::{
+    input::keyboard::KeyboardInput,
+    prelude::*,
+    text::{BreakLineOn, TextLayoutInfo},
+    ui::{widget::TextFlags, ContentSize, FocusPolicy},
+};
 
 pub struct TextBoxPlugin;
 
@@ -25,76 +18,161 @@ impl Plugin for TextBoxPlugin {
                 handle_click_to_focus,
                 highlight_focused,
             ),
-        );
+        )
+        .add_systems(Startup, setup_cursor);
     }
 }
 
-pub fn create_text_box(cb: &mut ChildBuilder, font: Handle<Font>) {
-    cb.spawn((
-        NodeBundle {
-            style: Style {
-                width: Val::Px(300.),
-                height: Val::Px(48.),
-                overflow: Overflow::clip(),
-                margin: UiRect {
-                    top: Val::Px(5.),
-                    ..default()
-                },
-                ..default()
-            },
-            background_color: Color::WHITE.into(),
-            ..default()
-        },
-        Interaction::default(),
-        TextInput,
-    ))
-    .with_children(|parent| {
-        parent.spawn((TextBundle {
-            text: Text::from_section(
-                "".to_string(),
-                TextStyle {
-                    font,
-                    font_size: 42.0,
-                    color: Color::BLACK,
-                },
-            ),
-            ..default()
-        },));
+#[derive(Component, Debug)]
+pub struct TextBox;
 
-        parent.spawn((
-            NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    width: Val::Px(1.),
-                    height: Val::Px(42.),
-                    left: Val::Px(5.),
-                    ..default()
-                },
-                background_color: Color::rgba(0., 0., 0., 1.).into(),
-                visibility: Visibility::Hidden,
+/// A UI node that is text
+#[derive(Bundle, Debug)]
+pub struct TextBoxBundle {
+    // TEXTBOX BITS
+    /// Describes the logical size of the node
+    pub node: Node,
+    /// Styles which control the layout (size and position) of the node and it's children
+    /// In some cases these styles also affect how the node drawn/painted.
+    pub style: Style,
+    /// Contains the text of the node
+    pub text: Text,
+    /// Text layout information
+    pub text_layout_info: TextLayoutInfo,
+    /// Text system flags
+    pub text_flags: TextFlags,
+    /// The calculated size based on the given image
+    pub calculated_size: ContentSize,
+    /// Whether this node should block interaction with lower nodes
+    pub focus_policy: FocusPolicy,
+    /// The transform of the node
+    ///
+    /// This field is automatically managed by the UI layout system.
+    /// To alter the position of the `NodeBundle`, use the properties of the [`Style`] component.
+    pub transform: Transform,
+    /// The global transform of the node
+    ///
+    /// This field is automatically managed by the UI layout system.
+    /// To alter the position of the `NodeBundle`, use the properties of the [`Style`] component.
+    pub global_transform: GlobalTransform,
+    /// Describes the visibility properties of the node
+    pub visibility: Visibility,
+    /// Algorithmically-computed indication of whether an entity is visible and should be extracted for rendering
+    pub computed_visibility: ComputedVisibility,
+    /// Indicates the depth at which the node should appear in the UI
+    pub z_index: ZIndex,
+    /// The background color that will fill the containing node
+    pub background_color: BackgroundColor,
+    // EXTRA BITS
+    pub interaction: Interaction,
+    pub tag: TextBox,
+}
+
+impl Default for TextBoxBundle {
+    fn default() -> Self {
+        Self {
+            text: Default::default(),
+            text_layout_info: Default::default(),
+            text_flags: Default::default(),
+            calculated_size: Default::default(),
+            background_color: BackgroundColor(Color::WHITE),
+            node: Default::default(),
+            style: Style {
+                overflow: Overflow::clip(),
                 ..default()
             },
-            Cursor {
-                timer: Timer::from_seconds(0.45, TimerMode::Repeating),
-            },
-        ));
-    })
-    .insert(MainMenuData); // TODO lifetimes and ting to return EntityCommands or something
+            focus_policy: Default::default(),
+            transform: Default::default(),
+            global_transform: Default::default(),
+            visibility: Default::default(),
+            computed_visibility: Default::default(),
+            z_index: Default::default(),
+            interaction: Default::default(),
+            tag: TextBox,
+        }
+    }
 }
+
+#[allow(dead_code)]
+impl TextBoxBundle {
+    /// Create a [`TextBundle`] from a single section.
+    ///
+    /// See [`Text::from_section`] for usage.
+    pub fn from_section(value: impl Into<String>, style: TextStyle) -> Self {
+        Self {
+            text: Text::from_section(value, style),
+            ..Default::default()
+        }
+    }
+
+    /// Create a [`TextBundle`] from a list of sections.
+    ///
+    /// See [`Text::from_sections`] for usage.
+    pub fn from_sections(sections: impl IntoIterator<Item = TextSection>) -> Self {
+        Self {
+            text: Text::from_sections(sections),
+            ..Default::default()
+        }
+    }
+
+    /// Returns this [`TextBundle`] with a new [`TextAlignment`] on [`Text`].
+    pub const fn with_text_alignment(mut self, alignment: TextAlignment) -> Self {
+        self.text.alignment = alignment;
+        self
+    }
+
+    /// Returns this [`TextBundle`] with a new [`Style`].
+    pub fn with_style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Returns this [`TextBundle`] with a new [`BackgroundColor`].
+    pub const fn with_background_color(mut self, color: Color) -> Self {
+        self.background_color = BackgroundColor(color);
+        self
+    }
+
+    /// Returns this [`TextBundle`] with soft wrapping disabled.
+    /// Hard wrapping, where text contains an explicit linebreak such as the escape sequence `\n`, will still occur.
+    pub const fn with_no_wrap(mut self) -> Self {
+        self.text.linebreak_behavior = BreakLineOn::NoWrap;
+        self
+    }
+}
+
+// Systems
 
 #[derive(Component)]
 struct Focused;
-
-#[derive(Component)]
-pub struct TextInput;
 
 #[derive(Component)]
 struct Cursor {
     timer: Timer,
 }
 
+fn setup_cursor(mut commands: Commands) {
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                width: Val::Px(1.),
+                height: Val::Px(30.),
+                left: Val::Px(5.),
+                ..default()
+            },
+            background_color: Color::rgba(0., 0., 0., 1.).into(),
+            visibility: Visibility::Hidden,
+            z_index: ZIndex::Global(10),
+            ..default()
+        })
+        .insert(Cursor {
+            timer: Timer::from_seconds(0.45, TimerMode::Repeating),
+        });
+}
+
 fn unfocus(
-    mut q_focused: Query<(Entity, &Children), With<Focused>>,
+    q_focused: Query<Entity, With<Focused>>,
     mut commands: Commands,
     mouse: Res<Input<MouseButton>>,
     mut q_cursor: Query<&mut Visibility, With<Cursor>>,
@@ -103,15 +181,15 @@ fn unfocus(
         return;
     }
     if mouse.just_pressed(MouseButton::Left) {
-        let (focused, children) = q_focused.single_mut();
-        let mut visibility = q_cursor.get_mut(children[1]).unwrap();
+        let focused = q_focused.single();
         commands.entity(focused).remove::<Focused>();
+        let mut visibility = q_cursor.single_mut();
         *visibility = Visibility::Hidden;
     }
 }
 
 fn handle_click_to_focus(
-    q_input: Query<(Entity, &Interaction), (Changed<Interaction>, With<TextInput>)>,
+    q_input: Query<(Entity, &Interaction), (Changed<Interaction>, With<TextBox>)>,
     mut windows: Query<&mut Window>,
     mut commands: Commands,
 ) {
@@ -120,8 +198,8 @@ fn handle_click_to_focus(
     for (entity, interaction) in &mut q_input.iter() {
         match interaction {
             Interaction::None => {
+                // TODO bad way of doing this, should set to default at start of each frame and modify if needed
                 window.cursor.icon = CursorIcon::Default;
-                // TODO perftest/research this, does it assign repeatedly or is it a noop?
             }
             Interaction::Hovered => {
                 window.cursor.icon = CursorIcon::Text;
@@ -136,19 +214,20 @@ fn handle_click_to_focus(
 
 fn highlight_focused(
     mut q_cursor: Query<(&mut Visibility, &mut Style, &mut Cursor)>,
-    q_text_info: Query<&TextLayoutInfo>,
-    q_focused: Query<&Children, With<Focused>>,
+    q_text_info: Query<(&Node, &GlobalTransform, &TextLayoutInfo), With<Focused>>,
     time: Res<Time>,
 ) {
-    if q_focused.is_empty() {
+    if q_text_info.is_empty() {
         return;
     }
 
-    let children = q_focused.single();
+    if q_cursor.is_empty() {
+        return;
+    }
 
-    let text_info = q_text_info.get(children[0]).unwrap();
+    let (node, transform, text_info) = q_text_info.single();
 
-    let (mut visibility, mut style, mut cursor) = q_cursor.get_mut(children[1]).unwrap();
+    let (mut visibility, mut style, mut cursor) = q_cursor.single_mut();
 
     cursor.timer.tick(time.delta());
 
@@ -160,24 +239,26 @@ fn highlight_focused(
         }
     }
 
-    let offset = text_info.size.x;
+    // Doesn't work multiline.
+    let offset_x = text_info.size.x;
+
+    let text_box_left = transform.translation().x - node.logical_rect(transform).width() / 2.;
+    let text_box_top = 3. + transform.translation().y - node.logical_rect(transform).height() / 2.;
 
     // gotta love magic numbers that make things work with no explanation.
-    style.left = Val::Px((offset * 0.93).max(5.));
+    style.left = Val::Px((offset_x * 0.93).max(5.) + text_box_left);
+    style.top = Val::Px(text_box_top);
 }
 
 fn listen_received_character_events(
     mut events: EventReader<ReceivedCharacter>,
-    mut q_text: Query<&mut Text>,
-    q_focused: Query<&Children, With<Focused>>,
+    mut q_focused: Query<&mut Text, With<Focused>>,
 ) {
     if q_focused.is_empty() {
         return;
     }
 
-    let children = q_focused.get_single().unwrap();
-
-    let mut edit_text = q_text.get_mut(children[0]).unwrap();
+    let mut edit_text = q_focused.single_mut();
 
     for event in events.iter() {
         // IF NOT RETURN
@@ -190,17 +271,15 @@ fn listen_received_character_events(
 fn listen_keyboard_input_events(
     mut commands: Commands,
     mut events: EventReader<KeyboardInput>,
-    mut q_text: Query<&mut Text>,
-    q_focused: Query<(Entity, &Children), With<Focused>>,
+    mut q_focused: Query<(Entity, &mut Text), With<Focused>>,
     mut q_cursor: Query<&mut Visibility, With<Cursor>>,
 ) {
     if q_focused.is_empty() {
         return;
     }
 
-    let (focused, children) = q_focused.get_single().unwrap();
-    let mut edit_text = q_text.get_mut(children[0]).unwrap();
-    let mut cursor_visibility = q_cursor.get_mut(children[1]).unwrap();
+    let (focused, mut edit_text) = q_focused.single_mut();
+    let mut cursor_visibility = q_cursor.single_mut();
 
     for event in events.iter() {
         match event.key_code {
