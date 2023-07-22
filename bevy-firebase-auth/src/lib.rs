@@ -15,59 +15,35 @@ use bevy::prelude::*;
 
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-// TODO clean up repetitive enums; Provider enum, tuple structs for different use cases
 // Sign In Methods
 // app id, client id, application id, and twitter's api key are all client_id
 // app secret, client secret, application secret, and twitter's api secret are all client_secret
-#[derive(Clone)]
-pub enum SignInMethod {
-    Google {
-        client_id: String,
-        client_secret: String,
-    },
-    Github {
-        client_id: String,
-        client_secret: String,
-    },
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub enum LoginProvider {
+    Google,
+    Github,
+    // NOT YET IMPLEMENTED
     EmailPassword,
-    // TODO
     Apple,
     Phone,
     Anonymous,
-    GooglePlayGames {
-        client_id: String,
-        client_secret: String,
-    },
-    Facebook {
-        client_id: String,
-        client_secret: String,
-    },
-    Twitter {
-        client_id: String,
-        client_secret: String,
-    },
-    Microsoft {
-        client_id: String,
-        client_secret: String,
-    },
-    Yahoo {
-        client_id: String,
-        client_secret: String,
-    },
+    GooglePlayGames,
+    AppleGameCenter,
+    Facebook,
+    Twitter,
+    Microsoft,
+    Yahoo,
 }
 
-#[derive(Resource, Clone)]
-pub struct SignInMethods(Vec<SignInMethod>);
+/// e.g.
+/// ```
+/// map.insert(LoginProvider::Google, ("client_id".into(), "client_secret".into()));
+pub type LoginKeysMap = HashMap<LoginProvider, (String, String)>;
+pub type AuthUrlsMap = HashMap<LoginProvider, Url>;
+pub type AuthCodesMap = HashMap<LoginProvider, String>;
 
-#[derive(Debug)]
-pub enum AuthUrl {
-    Google(Url),
-    Github(Url),
-    Facebook(Url),
-    Twitter(Url),
-    Microsoft(Url),
-    Yahoo(Url),
-}
+#[derive(Resource)]
+struct LoginKeys(LoginKeysMap);
 
 /// Event that is sent when an Authorization URL is created
 ///
@@ -75,29 +51,15 @@ pub enum AuthUrl {
 ///
 /// Consuming the event:
 /// ```
-/// fn auth_url_listener(mut er: EventReader<GotAuthUrl>) {
-///     for e in er.iter() {
-///         println!("Go to this URL to sign in:\n{}\n", e.0);
-///     }
-/// }
+/// TODO
 #[derive(Event, Debug)]
-pub struct AuthUrls(pub Vec<AuthUrl>);
-
-#[derive(Debug, Clone)]
-pub enum AuthCode {
-    Google(String),
-    Github(String),
-    Facebook(String),
-    Twitter(String),
-    Microsoft(String),
-    Yahoo(String),
-}
+pub struct AuthUrlsEvent(pub AuthUrlsMap);
 
 #[derive(Event, Debug)]
-pub struct AuthCodeEvent(AuthCode);
+pub struct AuthCodeEvent((LoginProvider, String));
 
 #[derive(Event, Resource)]
-pub struct SelectedProvider(pub AuthCode);
+pub struct SelectedProvider(pub LoginProvider);
 
 #[derive(Resource, Clone)]
 pub struct AuthEmulatorUrl(String);
@@ -193,7 +155,7 @@ pub struct AuthPlugin {
     pub firebase_api_key: String,
     pub firebase_project_id: String,
     pub firebase_refresh_token: Option<String>,
-    pub sign_in_methods: SignInMethods,
+    pub login_keys: LoginKeysMap,
     /// "http://127.0.0.1:9099"
     pub emulator_url: Option<String>,
 }
@@ -208,7 +170,7 @@ impl Default for AuthPlugin {
                 Err(_) => None,
             };
 
-        let mut sign_in_methods = Vec::new();
+        let mut login_keys = HashMap::new();
 
         let google_client_id = match read_to_string(data_dir.join("keys/google-client-id.key")) {
             Ok(key) => Some(key),
@@ -222,37 +184,30 @@ impl Default for AuthPlugin {
             };
 
         if let (Some(client_id), Some(client_secret)) = (google_client_id, google_client_secret) {
-            sign_in_methods.push(SignInMethod::Google {
-                client_id,
-                client_secret,
-            })
+            login_keys.insert(LoginProvider::Google, (client_id, client_secret));
         }
 
-        // TODO reenable this code when differentiation between oAuth code receiving works
-        // let github_client_id = match read_to_string(data_dir.join("keys/github-client-id.key")) {
-        //     Ok(key) => Some(key),
-        //     Err(_) => None,
-        // };
+        let github_client_id = match read_to_string(data_dir.join("keys/github-client-id.key")) {
+            Ok(key) => Some(key),
+            Err(_) => None,
+        };
 
-        // let github_client_secret =
-        //     match read_to_string(data_dir.join("keys/github-client-secret.key")) {
-        //         Ok(key) => Some(key),
-        //         Err(_) => None,
-        //     };
+        let github_client_secret =
+            match read_to_string(data_dir.join("keys/github-client-secret.key")) {
+                Ok(key) => Some(key),
+                Err(_) => None,
+            };
 
-        // if let (Some(client_id), Some(client_secret)) = (github_client_id, github_client_secret) {
-        //     sign_in_methods.push(SignInMethod::Github {
-        //         client_id,
-        //         client_secret,
-        //     })
-        // }
+        if let (Some(client_id), Some(client_secret)) = (github_client_id, github_client_secret) {
+            login_keys.insert(LoginProvider::Github, (client_id, client_secret));
+        }
 
         AuthPlugin {
             firebase_api_key: "literally anything for emulator".into(),
             firebase_refresh_token,
             firebase_project_id: "demo-bevy".into(),
             emulator_url: Some("http://127.0.0.1:9099".into()),
-            sign_in_methods: SignInMethods(sign_in_methods),
+            login_keys,
         }
     }
 }
@@ -264,15 +219,12 @@ impl Plugin for AuthPlugin {
         app.insert_resource(ApiKey(self.firebase_api_key.clone()))
             .insert_resource(ProjectId(self.firebase_project_id.clone()))
             .insert_resource(TokenData::default())
-            .insert_resource(self.sign_in_methods.clone())
+            .insert_resource(LoginKeys(self.login_keys.clone()))
             .add_state::<AuthState>()
-            .add_event::<AuthUrls>()
+            .add_event::<AuthUrlsEvent>()
             .add_event::<AuthCodeEvent>()
             .add_systems(OnEnter(AuthState::LogIn), init_login)
-            .add_systems(
-                OnEnter(AuthState::GotAuthCode),
-                google_id_token_to_firebase_token,
-            )
+            .add_systems(OnEnter(AuthState::GotAuthCode), auth_code_to_firebase_token)
             .add_systems(OnEnter(AuthState::Refreshing), refresh_login)
             .add_systems(OnEnter(AuthState::LoggedIn), save_refresh_token)
             .add_systems(OnEnter(AuthState::LogOut), login_clear_resources)
@@ -354,8 +306,8 @@ fn login_clear_resources(mut commands: Commands) {
 
 fn init_login(
     mut commands: Commands,
-    sign_in_methods: Res<SignInMethods>,
-    mut ew: EventWriter<AuthUrls>,
+    login_keys: Res<LoginKeys>,
+    mut ew: EventWriter<AuthUrlsEvent>,
     runtime: ResMut<TokioTasksRuntime>,
 ) {
     // sets up redirect server
@@ -373,47 +325,23 @@ fn init_login(
 
     commands.insert_resource(RedirectPort(port));
 
-    let mut auth_urls = Vec::new();
+    let mut auth_urls = HashMap::new();
 
-    for keys in sign_in_methods.0.iter() {
-        match keys {
-            SignInMethod::Google {
-                client_id,
-                client_secret: _,
-            } => {
+    for (provider, (client_id, _client_secret)) in login_keys.0.iter() {
+        match provider {
+            LoginProvider::Google => {
                 let google_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, client_id)).unwrap();
-                auth_urls.push(AuthUrl::Google(google_url));
+                auth_urls.insert(LoginProvider::Google, google_url);
             }
-            SignInMethod::Github {
-                client_id,
-                client_secret: _,
-            } => {
-                let github_url = Url::parse(&format!("https://github.com/login/oauth/authorize?scope=user:email&redirect_uri=http://127.0.0.1:{}&client_id={}", port, client_id )).unwrap();
-                auth_urls.push(AuthUrl::Github(github_url));
+            LoginProvider::Github => {
+                let github_url: Url = Url::parse(&format!("https://github.com/login/oauth/authorize?scope=read:user&redirect_uri=http://127.0.0.1:{}&client_id={}", port, client_id )).unwrap();
+                auth_urls.insert(LoginProvider::Github, github_url);
             }
-            SignInMethod::EmailPassword => {}
             _ => {}
         }
     }
 
-    ew.send(AuthUrls(auth_urls));
-
-    // TODO figure out differentiating between providers
-    // Server needs to be spun up and ready before giving user auth URLs
-    //  cos the login can be pretty quick
-    // BUT the stream has no data on where it came from
-    // SO there needs to be another way to discern what oAuth things we're dealing with.
-    // MAYBE when user clicks the provider button set the server up?
-    // Nah, wouldn't work in console.
-    // Set a flag when the user clicks a login button?
-    // But what if they click all of them? Then there would have to be button disabling, and timeout if that login fails....
-    // IF all providers return their code as a `code` param I could sort on the other side?
-    // Only by trying all oauth servers and failing though, that doesn't seem right.
-    // Spawn a server for each provider type? More unnecessary computation locally but could work?
-    // EventReader for AuthUrls, only spawn listeners for URLs we have.
-    // Nope, the URLs need to have ports in them
-    // Hmmmmmmmm
-    // Looks like it's a flag system. User clicks login, disable all login buttons and wait for response. Cancel button the get back to login page that kills the listener.
+    ew.send(AuthUrlsEvent(auth_urls));
 
     runtime.spawn_background_task(|mut ctx| async move {
         for stream in listener.incoming() {
@@ -448,13 +376,17 @@ fn init_login(
                                 if let Some(selected_provider) = selected_provider {
                                     // Match on provider flag
                                     match selected_provider.0.clone() {
-                                        AuthCode::Google(_) => {
-                                            ctx.world
-                                                .send_event(AuthCodeEvent(AuthCode::Google(code)));
+                                        LoginProvider::Google => {
+                                            ctx.world.send_event(AuthCodeEvent((
+                                                LoginProvider::Google,
+                                                code,
+                                            )));
                                         }
-                                        AuthCode::Github(_) => {
-                                            ctx.world
-                                                .send_event(AuthCodeEvent(AuthCode::Github(code)));
+                                        LoginProvider::Github => {
+                                            ctx.world.send_event(AuthCodeEvent((
+                                                LoginProvider::Github,
+                                                code,
+                                            )));
                                         }
                                         _ => panic!("NO SELECTED PROVIDER"),
                                     }
@@ -490,17 +422,13 @@ fn init_login(
     });
 }
 
-// TODO version of this for each provider?
-// OR return correct struct type per provider
-// Mutate return object into common form?
-// Could do all that with serde macros, renaming and stuff, make every field optional
-fn google_id_token_to_firebase_token(
+fn auth_code_to_firebase_token(
     mut auth_code_event_reader: EventReader<AuthCodeEvent>,
     runtime: ResMut<TokioTasksRuntime>,
     port: Res<RedirectPort>,
     api_key: Res<ApiKey>,
     emulator: Option<Res<AuthEmulatorUrl>>,
-    sign_in_methods: Res<SignInMethods>,
+    login_keys: Res<LoginKeys>,
 ) {
     let root_url = match emulator {
         Some(url) => format!("{}/identitytoolkit.googleapis.com", url.0.clone()),
@@ -508,21 +436,23 @@ fn google_id_token_to_firebase_token(
     };
 
     for auth_code_event in auth_code_event_reader.iter() {
-        if let AuthCode::Google(auth_code) = auth_code_event.0.clone() {
-            // TODO invert logic, early return
-            for keys in sign_in_methods.0.iter() {
-                if let SignInMethod::Google {
-                    client_id,
-                    client_secret,
-                } = keys.clone()
-                {
-                    let api_key = api_key.0.clone();
-                    let port = format!("{}", port.0);
-                    let auth_code = auth_code.clone();
-                    let root_url = root_url.clone();
+        let (provider, auth_code) = auth_code_event.0.clone();
 
-                    runtime.spawn_background_task(|mut ctx| async move {
-                        let client = reqwest::Client::new();
+        if let Some((client_id, client_secret)) = login_keys.0.get(&provider) {
+            let api_key = api_key.0.clone();
+            let port = format!("{}", port.0);
+            let auth_code = auth_code.clone();
+            let root_url = root_url.clone();
+            let client_secret = client_secret.clone();
+            let client_id = client_id.clone();
+            let provider = provider.clone();
+
+            runtime.spawn_background_task(|mut ctx| async move {
+                let client = reqwest::Client::new();
+                let mut body: HashMap<String, Value> = HashMap::new();
+
+                match provider.clone() {
+                    LoginProvider::Google => {
                         let form = reqwest::multipart::Form::new()
                             .text("code", auth_code)
                             .text("client_id", client_id)
@@ -548,7 +478,6 @@ fn google_id_token_to_firebase_token(
 
                         let id_token = google_token.id_token;
 
-                        let mut body: HashMap<String, Value> = HashMap::new();
                         body.insert(
                             "postBody".into(),
                             Value::String(format!(
@@ -556,41 +485,69 @@ fn google_id_token_to_firebase_token(
                                 id_token, "google.com"
                             )),
                         );
+                    }
+                    LoginProvider::Github => {
+                        // TODO no github on emulator
+
+                        #[derive(Deserialize, Debug)]
+                        struct GithubTokenResponse {
+                            access_token: String
+                        }
+
+                        let response = client.post(format!("https://github.com/login/oauth/access_token?client_id={}&client_secret={}&code={}",client_id,client_secret,auth_code))
+                        .header("Accept", "application/json")
+                        .send()
+                        .await
+                        .unwrap()
+                        .json::<GithubTokenResponse>()
+                        .await
+                        .unwrap();
+
+                        let access_token = response.access_token;
+
                         body.insert(
-                            "requestUri".into(),
-                            Value::String(format!("http://127.0.0.1:{port}")),
-                        );
-                        body.insert("returnIdpCredential".into(), true.into());
-                        body.insert("returnSecureToken".into(), true.into());
-
-                        // Get Firebase Token
-                        let firebase_token = client
-                            .post(format!(
-                                "{}/v1/accounts:signInWithIdp?key={}",
-                                root_url, api_key
+                            "postBody".into(), 
+                            Value::String(format!(
+                                "access_token={}&providerId={}",
+                                access_token, "github.com"
                             ))
-                            .json(&body)
-                            .send()
-                            .await
-                            .unwrap()
-                            .json::<TokenData>()
-                            .await
-                            .unwrap();
-
-                        // Use Firebase Token TODO pull into fn?
-                        ctx.run_on_main_thread(move |ctx| {
-                            ctx.world.insert_resource(firebase_token);
-
-                            // Set next state
-                            ctx.world
-                                .insert_resource(NextState(Some(AuthState::LoggedIn)));
-                        })
-                        .await;
-                    });
-
-                    break;
+                        );
+                    }
+                    _ => (),
                 }
-            }
+
+                // Add common params
+                body.insert(
+                    "requestUri".into(),
+                    Value::String(format!("http://127.0.0.1:{port}")),
+                );
+                body.insert("returnIdpCredential".into(), true.into());
+                body.insert("returnSecureToken".into(), true.into());
+
+                // Get Firebase Token
+                let firebase_token = client
+                    .post(format!(
+                        "{}/v1/accounts:signInWithIdp?key={}",
+                        root_url, api_key
+                    ))
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<TokenData>()
+                    .await
+                    .unwrap();
+
+                // Use Firebase Token TODO pull into fn?
+                ctx.run_on_main_thread(move |ctx| {
+                    ctx.world.insert_resource(firebase_token);
+
+                    // Set next state
+                    ctx.world
+                        .insert_resource(NextState(Some(AuthState::LoggedIn)));
+                })
+                .await;
+            });
         }
     }
 }

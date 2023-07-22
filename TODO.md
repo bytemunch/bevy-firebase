@@ -1,10 +1,8 @@
-Query example
+Example Playground
 
 Macro for repeated code in firestore
 
 Tests
-
-Auth: More sign in methods
 
 Click game split into files
 

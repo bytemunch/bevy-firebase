@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use bevy::{app::AppExit, prelude::*};
 use bevy_firebase_auth::{
-    delete_account, log_in, log_out, AuthState, AuthUrls, ProjectId, SelectedProvider,
-    SignInMethod, SignInMethods, TokenData,
+    delete_account, log_in, log_out, AuthState, AuthUrlsEvent, LoginProvider, ProjectId,
+    SelectedProvider, TokenData,
 };
 use bevy_firebase_firestore::{
     async_delete_document, async_read_document, async_update_document, value::ValueType,
@@ -393,14 +393,10 @@ fn login_button_system(
             // Set selected provider
             match login_url.0 .0.as_str() {
                 "Google" => {
-                    commands.insert_resource(SelectedProvider(
-                        bevy_firebase_auth::AuthCode::Google("".into()),
-                    ));
+                    commands.insert_resource(SelectedProvider(LoginProvider::Google));
                 }
                 "Github" => {
-                    commands.insert_resource(SelectedProvider(
-                        bevy_firebase_auth::AuthCode::Github("".into()),
-                    ));
+                    commands.insert_resource(SelectedProvider(LoginProvider::Github));
                 }
                 _ => (),
             }
@@ -415,23 +411,22 @@ fn login_button_system(
 
 fn auth_url_listener(
     mut commands: Commands,
-    mut er: EventReader<AuthUrls>,
+    mut er: EventReader<AuthUrlsEvent>,
     mut q_ui_base: Query<Entity, With<UiBase>>,
     ui: Res<UiSettings>,
 ) {
     for e in er.iter() {
-        for auth_url in e.0.iter() {
+        for (provider, auth_url) in e.0.iter() {
             let mut provider_name = "";
             let mut display_url = "";
-            #[allow(clippy::single_match)] //TODO more matches
-            match auth_url {
-                bevy_firebase_auth::AuthUrl::Google(url) => {
+            match provider {
+                LoginProvider::Google => {
                     provider_name = "Google";
-                    display_url = url.as_str();
+                    display_url = auth_url.as_str();
                 }
-                bevy_firebase_auth::AuthUrl::Github(url) => {
+                LoginProvider::Github => {
                     provider_name = "Github";
-                    display_url = url.as_str();
+                    display_url = auth_url.as_str();
                 }
                 _ => (),
             }
