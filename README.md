@@ -2,18 +2,18 @@
 
 Google Firebase integration for Bevy.
 
-Currently only implements Google OAuth2 and a limited subset of Firestore operations.
+Currently only implements Google + GitHub OAuth2 and a limited subset of Firestore operations.
 
 ## Warnings
 
-This is very very not battle-tested, and you will be trusting the plugin with API keys that can be used to rack up some serious bills if you're not careful. Check docs to see how to set up Firestore with an emulator. There is currently no Auth emulator support.
+This is very very not battle-tested, and you will be trusting the plugin with API keys that can be used to rack up some serious bills if you're not careful. Check docs to see how to set up Firestore with an emulator.
 
 Your keys will either be embedded in the distributed binary, or provided as separate files, but no matter which they will need to be essentially public. Ensure your GCP is prepared for this.
 
 ## Installing
 
 <!-- TODO: `cargo add bevy-firebase` -->
-I'll get this on crates.io once I've learned CI/CD. And learned crates.io. For now it's a clone and paste job, sorry!
+I'll get this on crates.io once 0.0.1 is released. And I've learned crates.io. For now it's a clone and paste job, sorry!
 
 ### Dependencies
 
