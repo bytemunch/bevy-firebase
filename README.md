@@ -61,3 +61,8 @@ Once you have created a project, go to Project Settings (In the Settings cog on 
 We need to create an identifier to authenticate the app with Google's backend. Go [here](https://console.cloud.google.com/apis/credentials), select your project in the top left dropdown (TODO image), and create a new OAuth2 credential. Name it something recognisable, and make note of the Client ID and Client Secret once it is generated.
 
 NOTE: I have only tested with Desktop clients.
+
+# License
+
+Apache 2.0 or MIT at user's discretion.
+
