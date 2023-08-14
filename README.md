@@ -17,7 +17,7 @@ I'll get this on crates.io once 0.0.1 is released. And I've learned crates.io. F
 
 ### Dependencies
 
-Requires `bevy-tokio-tasks` for the tonic crate to work. Removing dependencies is a TODO, I just don't know Rust well enough yet.
+Requires [`bevy-tokio-tasks`](https://crates.io/crates/bevy-tokio-tasks/0.11.0) for the tonic crate to work. Removing dependencies is a TODO, I just don't know Rust well enough yet.
 
 ## Version Compatibility
 
