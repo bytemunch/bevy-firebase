@@ -345,7 +345,6 @@ fn init_login(
 
     runtime.spawn_background_task(|mut ctx| async move {
         for stream in listener.incoming() {
-            // TODO extract this to function?
             match stream {
                 Ok(mut stream) => {
                     {
@@ -536,7 +535,6 @@ fn auth_code_to_firebase_token(
                     .await
                     .unwrap();
 
-                // Use Firebase Token TODO pull into fn?
                 ctx.run_on_main_thread(move |ctx| {
                     ctx.world.insert_resource(firebase_token);
 
@@ -599,9 +597,6 @@ fn refresh_login(
             }
         };
 
-        // TODO handle errors here, panic prevents login button being generated
-        // TODO if login fails here, delete saved refresh key and break
-
         // Use Firebase Token
         ctx.run_on_main_thread(move |ctx| {
             ctx.world.insert_resource(firebase_token);
@@ -652,7 +647,6 @@ pub fn delete_account(
 
         // TODO handle errors like CREDENTIAL_TOO_OLD
 
-        // Use Firebase Token TODO pull into fn?
         ctx.run_on_main_thread(move |ctx| {
             // Set next state
             ctx.world

@@ -1049,7 +1049,6 @@ fn query_response_event_handler(
                 ew.send(UpdateLeaderboardEvent {
                     responses: e.query_response.clone(),
                 })
-                // TODO emit UpdateLeaderboard event (with parsed responses?)
             }
             0 => {}
             _ => {}
