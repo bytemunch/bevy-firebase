@@ -227,7 +227,7 @@ impl Plugin for AuthPlugin {
             .add_systems(OnEnter(AuthState::GotAuthCode), auth_code_to_firebase_token)
             .add_systems(OnEnter(AuthState::Refreshing), refresh_login)
             .add_systems(OnEnter(AuthState::LoggedIn), save_refresh_token)
-            .add_systems(OnEnter(AuthState::LogOut), login_clear_resources)
+            .add_systems(OnEnter(AuthState::LoggedIn), login_clear_resources)
             .add_systems(OnEnter(AuthState::LogOut), logout_clear_resources);
 
         if self.firebase_refresh_token.is_some() {
@@ -367,8 +367,6 @@ fn init_login(
                         if let Some(code_pair) = code_pair {
                             let code = code_pair.1.into_owned();
                             ctx.run_on_main_thread(move |ctx| {
-                                // TODO differentiate between providers here or before
-
                                 // Grab provider flag resource from world
                                 let selected_provider =
                                     ctx.world.get_resource::<SelectedProvider>();
@@ -587,8 +585,19 @@ fn refresh_login(
             .await
             .unwrap()
             .json::<TokenData>()
-            .await
-            .unwrap();
+            .await;
+
+        let firebase_token = match firebase_token {
+            Ok(token) => token,
+            Err(_) => {
+                // Set state to logout on failure
+                ctx.run_on_main_thread(|ctx| {
+                    ctx.world.insert_resource(NextState(Some(AuthState::LogIn)))
+                })
+                .await;
+                return;
+            }
+        };
 
         // TODO handle errors here, panic prevents login button being generated
         // TODO if login fails here, delete saved refresh key and break

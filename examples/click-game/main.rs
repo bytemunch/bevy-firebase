@@ -44,6 +44,7 @@ enum AuthControllerState {
 #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
 enum AppScreenState {
     #[default]
+    Empty,
     LogInScreen,
     MainMenu,
     InGame,
@@ -554,10 +555,14 @@ fn firestore_ready(
     });
 }
 
-fn logged_out(mut next_state: ResMut<NextState<AppScreenState>>) {
+fn logged_out(
+    mut next_state: ResMut<NextState<AppScreenState>>,
+    mut next_auth_state: ResMut<NextState<AuthControllerState>>,
+) {
     println!("logged_out");
     // set app state to main menu
     next_state.set(AppScreenState::LogInScreen);
+    next_auth_state.set(AuthControllerState::LogIn);
 }
 
 // MENU
