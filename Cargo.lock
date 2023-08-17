@@ -376,18 +376,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy-firebase"
-version = "0.0.1"
-dependencies = [
- "bevy",
- "bevy-firebase-auth",
- "bevy-firebase-firestore",
- "bevy-tokio-tasks",
- "bevy_macro_utils",
- "open",
-]
-
-[[package]]
 name = "bevy-firebase-auth"
 version = "0.1.0"
 dependencies = [
@@ -408,6 +396,7 @@ dependencies = [
  "bevy-tokio-tasks",
  "bevy_macro_utils",
  "futures-lite",
+ "open",
  "prost",
  "prost-types",
  "tonic",

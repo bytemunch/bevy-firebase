@@ -162,6 +162,8 @@ pub struct AuthPlugin {
 
 impl Default for AuthPlugin {
     fn default() -> Self {
+        // TODO no loading from file in lib.rs
+        // Pass loginkeys in plugin dings
         let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
 
         let firebase_refresh_token =
