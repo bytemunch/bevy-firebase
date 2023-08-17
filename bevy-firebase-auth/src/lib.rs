@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::{read_to_string, remove_file, write},
+    fs::{remove_file, write},
     io::{self, BufRead, BufReader, Write},
     net::TcpListener,
     path::PathBuf,
@@ -38,7 +38,7 @@ pub enum LoginProvider {
 /// e.g.
 /// ```
 /// map.insert(LoginProvider::Google, ("client_id".into(), "client_secret".into()));
-pub type LoginKeysMap = HashMap<LoginProvider, (String, String)>;
+pub type LoginKeysMap = HashMap<LoginProvider, Option<(String, String)>>;
 pub type AuthUrlsMap = HashMap<LoginProvider, Url>;
 pub type AuthCodesMap = HashMap<LoginProvider, String>;
 
@@ -160,60 +160,6 @@ pub struct AuthPlugin {
     pub emulator_url: Option<String>,
 }
 
-impl Default for AuthPlugin {
-    fn default() -> Self {
-        // TODO no loading from file in lib.rs
-        // Pass loginkeys in plugin dings
-        let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-
-        let firebase_refresh_token =
-            match read_to_string(data_dir.join("keys/firebase-refresh.key")) {
-                Ok(key) => Some(key),
-                Err(_) => None,
-            };
-
-        let mut login_keys = HashMap::new();
-
-        let google_client_id = match read_to_string(data_dir.join("keys/google-client-id.key")) {
-            Ok(key) => Some(key),
-            Err(_) => None,
-        };
-
-        let google_client_secret =
-            match read_to_string(data_dir.join("keys/google-client-secret.key")) {
-                Ok(key) => Some(key),
-                Err(_) => None,
-            };
-
-        if let (Some(client_id), Some(client_secret)) = (google_client_id, google_client_secret) {
-            login_keys.insert(LoginProvider::Google, (client_id, client_secret));
-        }
-
-        let github_client_id = match read_to_string(data_dir.join("keys/github-client-id.key")) {
-            Ok(key) => Some(key),
-            Err(_) => None,
-        };
-
-        let github_client_secret =
-            match read_to_string(data_dir.join("keys/github-client-secret.key")) {
-                Ok(key) => Some(key),
-                Err(_) => None,
-            };
-
-        if let (Some(client_id), Some(client_secret)) = (github_client_id, github_client_secret) {
-            login_keys.insert(LoginProvider::Github, (client_id, client_secret));
-        }
-
-        AuthPlugin {
-            firebase_api_key: "literally anything for emulator".into(),
-            firebase_refresh_token,
-            firebase_project_id: "demo-bevy".into(),
-            emulator_url: Some("http://127.0.0.1:9099".into()),
-            login_keys,
-        }
-    }
-}
-
 impl Plugin for AuthPlugin {
     fn build(&self, app: &mut App) {
         // TODO optionally save refresh token to file
@@ -329,7 +275,13 @@ fn init_login(
 
     let mut auth_urls = HashMap::new();
 
-    for (provider, (client_id, _client_secret)) in login_keys.0.iter() {
+    println!("{:?}", login_keys.0);
+
+    for (provider, optional_keys) in login_keys.0.iter() {
+        let mut client_id = String::new();
+        if let Some(keys) = optional_keys {
+            client_id = keys.0.clone();
+        }
         match provider {
             LoginProvider::Google => {
                 let google_url = Url::parse(&format!("https://accounts.google.com/o/oauth2/v2/auth?scope=openid profile email&response_type=code&redirect_uri=http://127.0.0.1:{}&client_id={}",port, client_id)).unwrap();
@@ -339,7 +291,9 @@ fn init_login(
                 let github_url: Url = Url::parse(&format!("https://github.com/login/oauth/authorize?scope=read:user&redirect_uri=http://127.0.0.1:{}&client_id={}", port, client_id )).unwrap();
                 auth_urls.insert(LoginProvider::Github, github_url);
             }
-            _ => {}
+            unknown_provider => {
+                panic!("NOT IMPLEMENTED! {:?}", unknown_provider);
+            }
         }
     }
 
@@ -437,7 +391,7 @@ fn auth_code_to_firebase_token(
     for auth_code_event in auth_code_event_reader.iter() {
         let (provider, auth_code) = auth_code_event.0.clone();
 
-        if let Some((client_id, client_secret)) = login_keys.0.get(&provider) {
+        if let Some(Some((client_id, client_secret))) = login_keys.0.get(&provider) {
             let api_key = api_key.0.clone();
             let port = format!("{}", port.0);
             let auth_code = auth_code.clone();
@@ -552,10 +506,14 @@ fn auth_code_to_firebase_token(
 
 fn save_refresh_token(token_data: Res<TokenData>) {
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-    let _ = write(
+    let save_result = write(
         data_dir.join("keys/firebase-refresh.key"),
         token_data.refresh_token.as_str(),
     );
+
+    if save_result.is_err() {
+        println!("Couldn't save refresh token: {:?}", save_result.unwrap());
+    }
 }
 
 fn refresh_login(
