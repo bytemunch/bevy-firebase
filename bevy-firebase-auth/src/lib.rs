@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::{create_dir_all, remove_file, write},
+    fs::{create_dir_all, remove_file, write, File},
     io::{self, BufRead, BufReader, Write},
     net::TcpListener,
 };
@@ -16,10 +16,12 @@ use bevy_tokio_tasks::TokioTasksRuntime;
 
 use dirs::cache_dir;
 
+use ron::de::from_reader;
+
 // Sign In Methods
 // app id, client id, application id, and twitter's api key are all client_id
 // app secret, client secret, application secret, and twitter's api secret are all client_secret
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize)]
 pub enum LoginProvider {
     Google,
     Github,
@@ -157,6 +159,37 @@ pub struct AuthPlugin {
     pub emulator_url: Option<String>,
 }
 
+impl Default for AuthPlugin {
+    fn default() -> Self {
+        let keys_path = "keys.ron";
+        let f = File::open(&keys_path);
+
+        let login_keys = match f {
+            Ok(f) => {
+                let login_keys: LoginKeysMap = match from_reader(f) {
+                    Ok(keys) => keys,
+                    Err(err) => {
+                        println!("File read error: {:?}", err);
+                        HashMap::new()
+                    }
+                };
+                login_keys
+            }
+            Err(err) => {
+                println!("File open error: {:?}", err);
+                HashMap::new()
+            }
+        };
+
+        AuthPlugin {
+            firebase_api_key: "API_KEY".into(),
+            firebase_project_id: "demo-bevy".into(),
+            emulator_url: Some("http://127.0.0.1:9099".into()),
+            login_keys,
+        }
+    }
+}
+
 impl Plugin for AuthPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ApiKey(self.firebase_api_key.clone()))
@@ -289,8 +322,6 @@ fn init_login(
     commands.insert_resource(RedirectPort(port));
 
     let mut auth_urls = HashMap::new();
-
-    println!("{:?}", login_keys.0);
 
     for (provider, optional_keys) in login_keys.0.iter() {
         let mut client_id = String::new();

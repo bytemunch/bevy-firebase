@@ -1,5 +1,5 @@
 /target
 err.json
-*.key
 *.log
 test_suite
+keys.ron

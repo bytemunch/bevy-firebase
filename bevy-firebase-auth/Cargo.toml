@@ -6,10 +6,11 @@ license = "MIT or Apache 2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serde = "1.0.164"
+serde = {version = "1.0.164", features = ["derive"]}
 serde_json = "1.0.103"
 bevy = "0.11.1"
 url = "2.4.0"
 bevy-tokio-tasks = "0.11.0"
 reqwest = {version = "0.11.18", features = ["json", "multipart"]}
 dirs="5.0.1"
+ron = "0.8.1"
