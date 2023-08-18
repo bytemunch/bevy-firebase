@@ -1,9 +1,8 @@
 use std::{
     collections::HashMap,
-    fs::{remove_file, write},
+    fs::{create_dir_all, remove_file, write},
     io::{self, BufRead, BufReader, Write},
     net::TcpListener,
-    path::PathBuf,
 };
 
 use reqwest::Client;
@@ -14,6 +13,8 @@ use url::Url;
 use bevy::prelude::*;
 
 use bevy_tokio_tasks::TokioTasksRuntime;
+
+use dirs::cache_dir;
 
 // Sign In Methods
 // app id, client id, application id, and twitter's api key are all client_id
@@ -73,6 +74,9 @@ pub struct ApiKey(String);
 /// Bevy `Resource` containing the app's Firebase Project ID
 #[derive(Resource)]
 pub struct ProjectId(pub String);
+
+#[derive(Resource)]
+pub struct RememberLoginFlag(pub bool);
 
 // TODO trim this down?
 /// Holds data from a user access token
@@ -146,15 +150,10 @@ pub enum AuthState {
 /// });
 /// ```
 /// This retrieves keys saved in data/keys/
-/// - firebase-api.key
-/// - google-client-id.key
-/// - google-client-secret.key
-/// - firebase-refresh.key (OPTIONAL)
 ///
 pub struct AuthPlugin {
     pub firebase_api_key: String,
     pub firebase_project_id: String,
-    pub firebase_refresh_token: Option<String>,
     pub login_keys: LoginKeysMap,
     /// "http://127.0.0.1:9099"
     pub emulator_url: Option<String>,
@@ -162,12 +161,11 @@ pub struct AuthPlugin {
 
 impl Plugin for AuthPlugin {
     fn build(&self, app: &mut App) {
-        // TODO optionally save refresh token to file
-
         app.insert_resource(ApiKey(self.firebase_api_key.clone()))
             .insert_resource(ProjectId(self.firebase_project_id.clone()))
             .insert_resource(TokenData::default())
             .insert_resource(LoginKeys(self.login_keys.clone()))
+            .insert_resource(RememberLoginFlag(false))
             .add_state::<AuthState>()
             .add_event::<AuthUrlsEvent>()
             .add_event::<AuthCodeEvent>()
@@ -178,11 +176,25 @@ impl Plugin for AuthPlugin {
             .add_systems(OnEnter(AuthState::LoggedIn), login_clear_resources)
             .add_systems(OnEnter(AuthState::LogOut), logout_clear_resources);
 
-        if self.firebase_refresh_token.is_some() {
-            app.insert_resource(TokenData {
-                refresh_token: self.firebase_refresh_token.clone().unwrap(),
-                ..Default::default()
-            });
+        // check for existing token
+
+        let path = cache_dir()
+            .clone()
+            .unwrap()
+            .join(env!("CARGO_PKG_NAME"))
+            .join("login")
+            .join("firebase-refresh.key");
+
+        let token = std::fs::read_to_string(path);
+
+        match token {
+            Ok(token) => {
+                app.insert_resource(TokenData {
+                    refresh_token: token,
+                    ..Default::default()
+                });
+            }
+            Err(_) => {}
         }
 
         if self.emulator_url.is_some() {
@@ -239,8 +251,13 @@ pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<Next
 fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextState<AuthState>>) {
     commands.remove_resource::<TokenData>();
 
-    let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-    let _ = remove_file(data_dir.join("keys/firebase-refresh.key"));
+    let path = cache_dir()
+        .clone()
+        .unwrap()
+        .join(env!("CARGO_PKG_NAME"))
+        .join("login")
+        .join("firebase-refresh.key");
+    let _ = remove_file(path);
 
     next_state.set(AuthState::LoggedOut);
 
@@ -506,15 +523,31 @@ fn auth_code_to_firebase_token(
     }
 }
 
-fn save_refresh_token(token_data: Res<TokenData>) {
-    let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
+fn save_refresh_token(token_data: Res<TokenData>, remember_login: Res<RememberLoginFlag>) {
+    if !remember_login.0 {
+        return;
+    }
+
+    let path = cache_dir()
+        .unwrap()
+        .join(env!("CARGO_PKG_NAME"))
+        .join("login");
+
+    let dir_result = create_dir_all(path.clone());
+
+    match dir_result {
+        Ok(()) => {}
+        Err(err) => println!("Couldn't create login directory: {:?}", err),
+    }
+
     let save_result = write(
-        data_dir.join("keys/firebase-refresh.key"),
+        path.clone().join("firebase-refresh.key"),
         token_data.refresh_token.as_str(),
     );
 
-    if save_result.is_err() {
-        println!("Couldn't save refresh token: {:?}", save_result.unwrap());
+    match save_result {
+        Ok(()) => {}
+        Err(err) => println!("Couldn't save refresh token to {:?}: {:?}", path, err),
     }
 }
 

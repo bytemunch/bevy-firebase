@@ -63,13 +63,8 @@ struct InGameData;
 #[derive(Component)]
 struct LeaderboardData;
 
-fn get_login_keys_from_file() -> (Option<String>, LoginKeysMap) {
+fn get_login_keys_from_file() -> LoginKeysMap {
     let data_dir = PathBuf::from_iter([std::env!("CARGO_MANIFEST_DIR"), "data"]);
-
-    let firebase_refresh_token = match read_to_string(data_dir.join("keys/firebase-refresh.key")) {
-        Ok(key) => Some(key),
-        Err(_) => None,
-    };
 
     let mut login_keys = HashMap::new();
 
@@ -107,18 +102,17 @@ fn get_login_keys_from_file() -> (Option<String>, LoginKeysMap) {
         info!("When running this example please provide your Github keys. Github auth is currently not supported in emulator.")
     }
 
-    (firebase_refresh_token, login_keys)
+    login_keys
 }
 
 fn main() {
-    let (firebase_refresh_token, login_keys) = get_login_keys_from_file();
+    let login_keys = get_login_keys_from_file();
 
     App::new()
         // PLUGINS
         .add_plugins(DefaultPlugins)
         .add_plugins(bevy_firebase_auth::AuthPlugin {
             firebase_api_key: "literally anything for emulator".into(),
-            firebase_refresh_token,
             firebase_project_id: "demo-bevy".into(),
             emulator_url: Some("http://127.0.0.1:9099".into()),
             login_keys,
