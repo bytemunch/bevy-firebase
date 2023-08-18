@@ -149,8 +149,6 @@ pub enum AuthState {
 ///     ..Default::default()
 /// });
 /// ```
-/// This retrieves keys saved in data/keys/
-///
 pub struct AuthPlugin {
     pub firebase_api_key: String,
     pub firebase_project_id: String,
@@ -181,7 +179,7 @@ impl Plugin for AuthPlugin {
         let path = cache_dir()
             .clone()
             .unwrap()
-            .join(env!("CARGO_PKG_NAME"))
+            .join(std::env::var("CARGO_PKG_NAME").unwrap())
             .join("login")
             .join("firebase-refresh.key");
 
@@ -254,7 +252,7 @@ fn logout_clear_resources(mut commands: Commands, mut next_state: ResMut<NextSta
     let path = cache_dir()
         .clone()
         .unwrap()
-        .join(env!("CARGO_PKG_NAME"))
+        .join(std::env::var("CARGO_PKG_NAME").unwrap())
         .join("login")
         .join("firebase-refresh.key");
     let _ = remove_file(path);
@@ -530,7 +528,7 @@ fn save_refresh_token(token_data: Res<TokenData>, remember_login: Res<RememberLo
 
     let path = cache_dir()
         .unwrap()
-        .join(env!("CARGO_PKG_NAME"))
+        .join(std::env::var("CARGO_PKG_NAME").unwrap())
         .join("login");
 
     let dir_result = create_dir_all(path.clone());
