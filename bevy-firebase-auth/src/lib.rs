@@ -37,7 +37,7 @@ pub enum LoginProvider {
 
 /// e.g.
 /// ```
-/// map.insert(LoginProvider::Google, ("client_id".into(), "client_secret".into()));
+/// map.insert(LoginProvider::Google, Some("client_id".into(), "client_secret".into()));
 pub type LoginKeysMap = HashMap<LoginProvider, Option<(String, String)>>;
 pub type AuthUrlsMap = HashMap<LoginProvider, Url>;
 pub type AuthCodesMap = HashMap<LoginProvider, String>;
@@ -391,16 +391,17 @@ fn auth_code_to_firebase_token(
     for auth_code_event in auth_code_event_reader.iter() {
         let (provider, auth_code) = auth_code_event.0.clone();
 
-        if let Some(Some((client_id, client_secret))) = login_keys.0.get(&provider) {
-            let api_key = api_key.0.clone();
-            let port = format!("{}", port.0);
-            let auth_code = auth_code.clone();
-            let root_url = root_url.clone();
-            let client_secret = client_secret.clone();
-            let client_id = client_id.clone();
-            let provider = provider.clone();
+        if let Some(keys) = login_keys.0.get(&provider) {
+            if let Some((client_id, client_secret)) = keys {
+                let api_key = api_key.0.clone();
+                let port = format!("{}", port.0);
+                let auth_code = auth_code.clone();
+                let root_url = root_url.clone();
+                let client_secret = client_secret.clone();
+                let client_id = client_id.clone();
+                let provider = provider.clone();
 
-            runtime.spawn_background_task(|mut ctx| async move {
+                runtime.spawn_background_task(|mut ctx| async move {
                 let client = reqwest::Client::new();
                 let mut body: HashMap<String, Value> = HashMap::new();
 
@@ -500,6 +501,7 @@ fn auth_code_to_firebase_token(
                 })
                 .await;
             });
+            }
         }
     }
 }
