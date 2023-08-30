@@ -1,7 +1,3 @@
-Simple examples
-
-Click game example split into files
-
 Less dependencies
 
 Storage

@@ -40,7 +40,11 @@ pub enum LoginProvider {
 
 /// e.g.
 /// ```
-/// map.insert(LoginProvider::Google, Some("client_id".into(), "client_secret".into()));
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_auth::*;
+/// # use std::collections::HashMap;
+/// let mut map: LoginKeysMap = HashMap::new();
+/// map.insert(LoginProvider::Google, Some(("client_id".into(), "client_secret".into())));
 pub type LoginKeysMap = HashMap<LoginProvider, Option<(String, String)>>;
 pub type AuthUrlsMap = HashMap<LoginProvider, Url>;
 pub type AuthCodesMap = HashMap<LoginProvider, String>;
@@ -54,7 +58,34 @@ struct LoginKeys(LoginKeysMap);
 ///
 /// Consuming the event:
 /// ```
-/// TODO
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_auth::*;
+/// fn auth_url_listener(
+///     mut er: EventReader<AuthUrlsEvent>,
+/// ) {
+///     for e in er.iter() {
+///         for (provider, auth_url) in e.0.iter() {
+///             let mut provider_name = "";
+///             let mut display_url = "";
+///             match provider {
+///                 LoginProvider::Google => {
+///                     provider_name = "Google";
+///                     display_url = auth_url.as_str();
+///                 }
+///                 LoginProvider::Github => {
+///                     provider_name = "Github";
+///                     display_url = auth_url.as_str();
+///                 }
+///                 _ => (),
+///             }
+///
+///             println!(
+///                 "Go to this URL to sign in with {}:\n{}\n",
+///                 provider_name, display_url
+///             );
+///         }
+///     }
+/// }
 #[derive(Event, Debug)]
 pub struct AuthUrlsEvent(pub AuthUrlsMap);
 
@@ -146,6 +177,9 @@ pub enum AuthState {
 ///
 /// Usage:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_auth::*;
+/// # let mut app = App::new();
 /// app.add_plugins(bevy_firebase_auth::AuthPlugin {
 ///     firebase_project_id: "YOUR-PROJECT-ID".into(),
 ///     ..Default::default()
@@ -243,6 +277,16 @@ impl Plugin for AuthPlugin {
 /// # Examples
 ///
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_auth::*;
+/// # let mut app = App::new();
+/// #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+/// enum AppAuthState {
+///     #[default]
+///     LogIn,
+///     LogOut,
+///     Delete
+/// };
 /// app.add_state::<AppAuthState>()
 /// .add_systems(OnEnter(AppAuthState::LogIn), log_in);
 pub fn log_in(
@@ -268,8 +312,18 @@ pub fn log_in(
 /// # Examples
 ///
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_auth::*;
+/// # let mut app = App::new();
+/// #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+/// enum AppAuthState {
+///     #[default]
+///     LogIn,
+///     LogOut,
+///     Delete
+/// };
 /// app.add_state::<AppAuthState>()
-/// .add_systems(OnEnter(AppAuthState::LogOut) log_out);
+/// .add_systems(OnEnter(AppAuthState::LogOut), log_out);
 /// ```
 pub fn log_out(current_state: Res<State<AuthState>>, mut next_state: ResMut<NextState<AuthState>>) {
     if *current_state.get() == AuthState::LoggedOut {
@@ -641,7 +695,17 @@ fn refresh_login(
 ///
 /// Usage:
 /// ```
-/// app.add_systems(OnEnter(AppAuthState::Delete), delete_account)
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_auth::*;
+/// # let mut app = App::new();
+/// #[derive(Default, States, Debug, Clone, Eq, PartialEq, Hash)]
+/// enum AppAuthState {
+///     #[default]
+///     LogIn,
+///     LogOut,
+///     Delete
+/// };
+/// app.add_systems(OnEnter(AppAuthState::Delete), delete_account);
 pub fn delete_account(
     token_data: Res<TokenData>,
     firebase_api_key: Res<ApiKey>,

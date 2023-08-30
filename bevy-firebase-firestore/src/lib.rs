@@ -4,6 +4,7 @@ use std::fs::read_to_string;
 use std::{collections::HashMap, path::PathBuf};
 
 pub use crate::googleapis::google::firestore::v1::*;
+pub use googleapis::google::firestore::v1::listen_response::ResponseType;
 pub use googleapis::google::firestore::v1::structured_query::Direction as QueryDirection;
 pub use tonic::Status;
 
@@ -80,12 +81,16 @@ pub enum FirestoreState {
 ///
 /// With emulated Firestore:
 /// ```
+/// # use bevy_firebase_firestore::FirestorePlugin;
+/// # use bevy::prelude::*;
 /// App::new()
 ///     .add_plugins(FirestorePlugin::default());
 /// ```
 ///
 /// Live Firestore:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// App::new()
 ///     .add_plugins(FirestorePlugin {
 ///         emulator_url: None,
@@ -243,7 +248,15 @@ fn create_client(
 ///
 /// Implementing:
 /// ```
-/// impl ListenerResponseEventBuilder for ListenerResponseEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+///
+/// trait MyListenerResponseEventBuilder {
+///     fn new(msg: ListenResponse) -> Self;
+///     fn msg(&self) -> ListenResponse;
+/// }
+///
+/// impl MyListenerResponseEventBuilder for ListenerResponseEvent {
 ///    fn new(msg: ListenResponse) -> Self {
 ///        ListenerResponseEvent { msg }
 ///    }
@@ -263,9 +276,12 @@ pub trait ListenerResponseEventBuilder {
 /// Responding to listener events:
 ///
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// #
 /// fn listener_response_event_handler<T>(mut er: EventReader<T>)
 /// where
-///     T: Send + Sync + 'static + ListenerResponseEventBuilder,
+///     T: Send + Sync + 'static + ListenerResponseEventBuilder + Event,
 /// {
 ///     for ev in er.iter() {
 ///         match ev.msg().response_type.as_ref().unwrap() {
@@ -372,7 +388,14 @@ fn add_listener<T>(
 ///
 /// Implementing:
 /// ```
-/// impl CreateListenerEventBuilder for CreateListenerEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+///
+/// trait MyCreateListenerEventBuilder {
+///    fn target(&self) -> String;
+/// }
+///
+/// impl MyCreateListenerEventBuilder for CreateListenerEvent {
 ///     fn target(&self) -> String {
 ///         self.target.clone()
 ///     }
@@ -387,6 +410,8 @@ pub trait CreateListenerEventBuilder {
 ///
 /// Sending a CreateListenerEvent:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn create_listener(
 ///     mut listener_creator: EventWriter<CreateListenerEvent>,
 /// ) {
@@ -413,6 +438,9 @@ impl CreateListenerEventBuilder for CreateListenerEvent {
 ///
 /// ## Implementing:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # let mut app = App::new();
 /// app
 ///     .add_event::<CreateListenerEvent>()
 ///     .add_event::<ListenerResponseEvent>()
@@ -423,6 +451,8 @@ impl CreateListenerEventBuilder for CreateListenerEvent {
 ///
 /// ## Using:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn create_listener(mut ew: EventWriter<CreateListenerEvent>) {
 ///     ew.send(CreateListenerEvent { target: String::from("test_collection/test_document")})
 /// }
@@ -447,7 +477,7 @@ pub fn create_listener_event_handler<T, R>(
 
 // QUERY
 
-type QueryResponse = Result<Vec<RunQueryResponse>, Status>;
+pub type QueryResponse = Result<Vec<RunQueryResponse>, Status>;
 
 /// Implement this to create custom listener response events
 ///
@@ -455,7 +485,13 @@ type QueryResponse = Result<Vec<RunQueryResponse>, Status>;
 ///
 /// Implementing:
 /// ```
-/// impl QueryResponseEventBuilder for QueryResponseEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// trait MyQueryResponseEventBuilder {
+///     fn new(query_response: QueryResponse, id: usize) -> Self;
+///     fn query_response(&self) -> QueryResponse;
+/// }
+/// impl MyQueryResponseEventBuilder for QueryResponseEvent {
 ///     fn new(query_response: QueryResponse, id: usize) -> Self {
 ///         QueryResponseEvent { query_response, id }
 ///     }
@@ -474,6 +510,8 @@ pub trait QueryResponseEventBuilder {
 /// # Examples
 /// Responding to a `QueryResponseEvent`:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn query_response_event_handler(
 ///     mut er: EventReader<QueryResponseEvent>,
 /// ) {
@@ -503,7 +541,16 @@ impl QueryResponseEventBuilder for QueryResponseEvent {
 ///
 /// Implementing:
 /// ```
-/// impl RunQueryEventBuilder for RunQueryEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// trait MyRunQueryEventBuilder {
+///     fn parent(&self) -> String;
+///     fn collection_id(&self) -> String;
+///     fn limit(&self) -> Option<i32>;
+///     fn order_by(&self) -> (String, QueryDirection);
+///     fn id(&self) -> usize;
+/// }
+/// impl MyRunQueryEventBuilder for RunQueryEvent {
 ///     fn collection_id(&self) -> String {
 ///         self.collection_id.clone()
 ///     }
@@ -532,13 +579,17 @@ pub trait RunQueryEventBuilder {
 ///
 /// # Examples
 /// ```
-/// RunQueryEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+///
+/// let e = RunQueryEvent {
 ///     parent: "".into(),
 ///     collection_id: "test_collection".into(),
 ///     limit: Some(10),
-///     order_by: ("price", QueryDirection::Ascending),
+///     order_by: ("price".to_string(), QueryDirection::Ascending),
 ///     id: 1337,
-/// }
+/// };
+///
 #[derive(Clone, Event)]
 pub struct RunQueryEvent {
     pub parent: String,
@@ -572,6 +623,10 @@ impl RunQueryEventBuilder for RunQueryEvent {
 ///
 /// ## Implementing:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # let mut app = App::new();
+///
 /// app
 ///     .add_event::<RunQueryEvent>()
 ///     .add_event::<QueryResponseEvent>()
@@ -582,13 +637,15 @@ impl RunQueryEventBuilder for RunQueryEvent {
 ///
 /// ## Using:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn run_query(mut ew: EventWriter<RunQueryEvent>) {
 ///     ew.send(
 ///         RunQueryEvent {
 ///             parent: "".into(),
 ///             collection_id: "test_collection".into(),
 ///             limit: Some(10),
-///             order_by: ("price", QueryDirection::Ascending),
+///             order_by: ("price".to_string(), QueryDirection::Ascending),
 ///             id: 1337,
 ///         }
 ///     )
@@ -777,6 +834,12 @@ pub type DocumentResult = Result<Document, Status>;
 pub type Client = FirestoreClient<InterceptedService<Channel, FirebaseInterceptor>>;
 
 // CREATE
+//
+
+/// what
+/// assert!(systems);
+/// systemssss
+///
 
 /// Implement this to create custom document create events
 ///
@@ -784,7 +847,19 @@ pub type Client = FirestoreClient<InterceptedService<Channel, FirebaseIntercepto
 ///
 /// Implementing:
 /// ```
-/// impl CreateDocumentEventBuilder for CreateDocumentEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # use std::collections::HashMap;
+///
+/// trait MyCreateDocumentEventBuilder {
+///    fn new(event: Self) -> Self;
+///    fn document_id(&self) -> String;
+///    fn collection_id(&self) -> String;
+///    fn document_data(&self) -> HashMap<String, Value>;
+///    fn id(&self) -> usize;
+/// };
+///
+/// impl MyCreateDocumentEventBuilder for CreateDocumentEvent {
 ///     fn new(event: Self) -> Self {
 ///         event
 ///     }
@@ -815,6 +890,10 @@ pub trait CreateDocumentEventBuilder {
 ///
 /// Sending a CreateDocumentEvent:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # use bevy_firebase_firestore::value::ValueType;
+/// # use std::collections::HashMap;
 /// fn create_test_document(mut document_creator: EventWriter<CreateDocumentEvent>) {
 ///     let document_id = "test_document".to_owned();
 ///     let mut document_data = HashMap::new();
@@ -864,7 +943,14 @@ impl CreateDocumentEventBuilder for CreateDocumentEvent {
 ///
 /// Implementing:
 /// ```
-/// impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+///
+/// trait MyCreateDocumentResponseEventBuilder {
+///     fn new(result: DocumentResult, id: usize) -> Self;
+/// }
+///
+/// impl MyCreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
 ///     fn new(result: DocumentResult, id: usize) -> Self {
 ///         CreateDocumentResponseEvent { result, id }
 ///     }
@@ -881,6 +967,8 @@ pub trait CreateDocumentResponseEventBuilder {
 ///
 /// Consuming the response event:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn create_document_response_event_handler(mut er: EventReader<CreateDocumentResponseEvent>) {
 ///     for e in er.iter() {
 ///         match e.result.clone() {
@@ -914,6 +1002,9 @@ impl CreateDocumentResponseEventBuilder for CreateDocumentResponseEvent {
 ///
 /// Implementing:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # let mut app = App::new();
 /// app.add_event::<CreateDocumentEvent>()
 /// .add_event::<CreateDocumentResponseEvent>()
 /// .add_systems(
@@ -969,7 +1060,16 @@ pub fn create_document_event_handler<T, R>(
 ///
 /// Implementing:
 /// ```
-/// impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # use std::collections::HashMap;
+/// trait MyUpdateDocumentEventBuilder {
+///    fn new(event: Self) -> Self;
+///    fn document_path(&self) -> String;
+///    fn document_data(&self) -> HashMap<String, Value>;
+///    fn id(&self) -> usize;
+/// }
+/// impl MyUpdateDocumentEventBuilder for UpdateDocumentEvent {
 ///     fn new(event: UpdateDocumentEvent) -> Self {
 ///         event
 ///     }
@@ -996,6 +1096,11 @@ pub trait UpdateDocumentEventBuilder {
 ///
 /// Sending an UpdateDocumentEvent:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # use bevy_firebase_firestore::value::ValueType;
+/// # use std::collections::HashMap;
+///
 /// fn update_test_document(mut document_updater: EventWriter<UpdateDocumentEvent>) {
 ///     let document_path = "test_collection/test_document".into();
 ///     let mut document_data = HashMap::new();
@@ -1041,7 +1146,12 @@ impl UpdateDocumentEventBuilder for UpdateDocumentEvent {
 ///
 /// Implementing:
 /// ```
-/// impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// trait MyUpdateDocumentResponseEventBuilder {
+///    fn new(result: DocumentResult, id: usize) -> Self;
+/// }
+/// impl MyUpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
 ///     fn new(result: DocumentResult, id: usize) -> Self {
 ///         UpdateDocumentResponseEvent { result, id }
 ///     }
@@ -1058,6 +1168,8 @@ pub trait UpdateDocumentResponseEventBuilder {
 ///
 /// Consuming the response event:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn update_document_response_event_handler(
 ///     mut er: EventReader<UpdateDocumentResponseEvent>,
 /// ) {
@@ -1093,6 +1205,10 @@ impl UpdateDocumentResponseEventBuilder for UpdateDocumentResponseEvent {
 ///
 /// Implementing:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # let mut app = App::new();
+///
 /// app.add_event::<UpdateDocumentEvent>()
 /// .add_event::<UpdateDocumentResponseEvent>()
 /// .add_systems(
@@ -1141,7 +1257,15 @@ pub fn update_document_event_handler<T, R>(
 ///
 /// Implementing:
 /// ```
-/// impl ReadDocumentEventBuilder for ReadDocumentEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+///
+/// trait MyReadDocumentEventBuilder {
+///    fn new(event: Self) -> Self;
+///    fn document_path(&self) -> String;
+///    fn id(&self) -> usize;
+/// }
+/// impl MyReadDocumentEventBuilder for ReadDocumentEvent {
 ///     fn new(event: ReadDocumentEvent) -> Self {
 ///         event
 ///     }
@@ -1164,6 +1288,8 @@ pub trait ReadDocumentEventBuilder {
 ///
 /// Sending a ReadDocumentEvent:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn read_test_document(mut document_reader: EventWriter<ReadDocumentEvent>) {
 ///     let document_path = "test_collection/test_document".into();
 ///     document_reader.send(ReadDocumentEvent {
@@ -1195,7 +1321,12 @@ impl ReadDocumentEventBuilder for ReadDocumentEvent {
 ///
 /// Implementing:
 /// ```
-/// impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// trait MyReadDocumentResponseEventBuilder {
+///     fn new(result: DocumentResult, id: usize) -> Self;
+/// }
+/// impl MyReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
 ///     fn new(result: DocumentResult, id: usize) -> Self {
 ///         ReadDocumentResponseEvent { result, id }
 ///     }
@@ -1212,6 +1343,8 @@ pub trait ReadDocumentResponseEventBuilder {
 ///
 /// Consuming the response event:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn read_document_response_event_handler(mut er: EventReader<ReadDocumentResponseEvent>) {
 ///     for e in er.iter() {
 ///         match e.result.clone() {
@@ -1245,12 +1378,15 @@ impl ReadDocumentResponseEventBuilder for ReadDocumentResponseEvent {
 ///
 /// Implementing:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # let mut app = App::new();
 /// app.add_event::<ReadDocumentEvent>()
 /// .add_event::<ReadDocumentResponseEvent>()
 /// .add_systems(
 ///     Update, read_document_event_handler::<ReadDocumentEvent, ReadDocumentResponseEvent>
 ///         .run_if(in_state(FirestoreState::Ready)),
-/// )
+/// );
 pub fn read_document_event_handler<T, R>(
     client: ResMut<BevyFirestoreClient>,
     project_id: Res<ProjectId>,
@@ -1292,7 +1428,14 @@ pub fn read_document_event_handler<T, R>(
 ///
 /// Implementing:
 /// ```
-/// impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// trait MyDeleteDocumentEventBuilder {
+///     fn new(event: Self) -> Self;
+///     fn document_path(&self) -> String;
+///     fn id(&self) -> usize;
+/// }
+/// impl MyDeleteDocumentEventBuilder for DeleteDocumentEvent {
 ///     fn new(event: DeleteDocumentEvent) -> Self {
 ///         event
 ///     }
@@ -1315,6 +1458,8 @@ pub trait DeleteDocumentEventBuilder {
 ///
 /// Sending a DeleteDocumentEvent:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn delete_test_document(mut document_deleter: EventWriter<DeleteDocumentEvent>) {
 ///     let document_path = "test_collection/test_document".into();
 ///     document_deleter.send(DeleteDocumentEvent {
@@ -1346,7 +1491,13 @@ impl DeleteDocumentEventBuilder for DeleteDocumentEvent {
 ///
 /// Implementing:
 /// ```
-/// impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+///
+/// trait MyDeleteDocumentResponseEventBuilder {
+///    fn new(result: Result<(), Status>, id: usize) -> Self;
+/// }
+/// impl MyDeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
 ///     fn new(result: Result<(), Status>, id: usize) -> Self {
 ///         DeleteDocumentResponseEvent { result, id }
 ///     }
@@ -1363,6 +1514,8 @@ pub trait DeleteDocumentResponseEventBuilder {
 ///
 /// Consuming the response event:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
 /// fn delete_document_response_event_handler(
 ///     mut er: EventReader<DeleteDocumentResponseEvent>,
 /// ) {
@@ -1398,6 +1551,9 @@ impl DeleteDocumentResponseEventBuilder for DeleteDocumentResponseEvent {
 ///
 /// Implementing:
 /// ```
+/// # use bevy::prelude::*;
+/// # use bevy_firebase_firestore::*;
+/// # let mut app = App::new();
 /// app.add_event::<DeleteDocumentEvent>()
 /// .add_event::<DeleteDocumentResponseEvent>()
 /// .add_systems(

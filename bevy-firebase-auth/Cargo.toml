@@ -1,5 +1,10 @@
 [package]
 name = "bevy-firebase-auth"
+description = "firebase auth for the bevy game engine"
+keywords = ["firebase","auth","login","bevy"]
+homepage = "https://bytemunch.dev/projects/bevy-firebase"
+repository = "https://github.com/bytemunch/bevy-firebase"
+readme = "README.md"
 version = "0.1.0"
 edition = "2021"
 license = "MIT or Apache 2.0"

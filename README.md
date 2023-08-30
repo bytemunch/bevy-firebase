@@ -62,7 +62,11 @@ We need to create an identifier to authenticate the app with Google's backend. G
 
 NOTE: I have only tested with Desktop clients.
 
-# License
+## Developing
+
+Clone repo, run `git submodule init` and `git submodule update`.
+
+## License
 
 Apache 2.0 or MIT at user's discretion.
 
