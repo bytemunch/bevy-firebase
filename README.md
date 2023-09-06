@@ -14,6 +14,12 @@ Your keys will either be embedded in the distributed binary, or provided as sepa
 
 Requires [`bevy-tokio-tasks`](https://crates.io/crates/bevy-tokio-tasks/0.11.0) for the tonic crate to work. Removing dependencies is a TODO, I just don't know Rust well enough yet.
 
+## Installing
+
+`cargo add bevy-firebase-auth`
+
+`cargo add bevy-firebase-firestore`
+
 ## Version Compatibility
 
 Targets Bevy `0.11.0`
