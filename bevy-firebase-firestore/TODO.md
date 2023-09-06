@@ -1,4 +1,4 @@
-Move googleapis to own crate
+Move googleapis to own crate OR finalize generated code and just embed that rather than every google API ever
 
 0.1.1
 

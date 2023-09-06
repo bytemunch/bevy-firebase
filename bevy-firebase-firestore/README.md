@@ -10,6 +10,8 @@ This is very very not battle-tested, and you will be trusting the plugin with AP
 
 Your keys will either be embedded in the distributed binary, or provided as separate files, but no matter which they will need to be essentially public. Ensure your GCP is prepared for this.
 
+This crate is massive. I'm pretty sure it's due to depending on googleapis, I'll be looking in to shrinking it down by finalising the API code next release.
+
 ## Installing
 
 `cargo add bevy-firebase-firestore`
