@@ -10,11 +10,6 @@ This is very very not battle-tested, and you will be trusting the plugin with AP
 
 Your keys will either be embedded in the distributed binary, or provided as separate files, but no matter which they will need to be essentially public. Ensure your GCP is prepared for this.
 
-## Installing
-
-<!-- TODO: `cargo add bevy-firebase` -->
-I'll get this on crates.io once 0.0.1 is released. And I've learned crates.io. For now it's a clone and paste job, sorry!
-
 ### Dependencies
 
 Requires [`bevy-tokio-tasks`](https://crates.io/crates/bevy-tokio-tasks/0.11.0) for the tonic crate to work. Removing dependencies is a TODO, I just don't know Rust well enough yet.
@@ -27,7 +22,18 @@ Targets Bevy `0.11.0`
 
 ### Setting up
 
-Create a Firebase project, grab your keys, and feed them to the plugin like so:
+Create a Firebase project and note your ProjectID and client ID and Secret.
+
+Place the client keys in a `keys.ron` in the root of your project, and add `keys.ron` to your `.gitignore`.
+
+The `keys.ron` should be formatted as so:
+```rs
+{
+    Github: Some(("YOUR-GITHUB-CLIENT-ID","YOUR-GITHUB-CLIENT-SECRET")),
+    Google: Some(("YOUR-GOOGLE-CLIENT-ID-STRING.apps.googleusercontent.com","YOUR-GOOGLE-CLIENT-SECRET"))
+}
+```
+> This structure will change, likely in the next release, so I'd advise against writing any tooling around it.
 
 ```rs
 App::new()
@@ -35,12 +41,7 @@ App::new()
     .add_plugins(DefaultPlugins)
     // Dependency for firestore RPC to work
     .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
-    .add_plugins(bevy_firebase_auth::AuthPlugin {
-        firebase_project_id: "YOUR-PROJECT-ID".into(),
-        google_client_id: "YOUR-CLIENT-ID".into(),
-        google_client_secret: "YOUR-CLIENT-SECRET".into(),
-        ..Default::default()
-    })
+    .add_plugins(bevy_firebase_auth::AuthPlugin::default())
     .add_plugins(bevy_firebase_firestore::FirestorePlugin::default());
 ```
 
@@ -54,11 +55,11 @@ Go to [this link](https://console.firebase.google.com/) and create a project.
 
 #### Project ID, API Key
 
-Once you have created a project, go to Project Settings (In the Settings cog on the Firebase project console) (TODO image), and take note of the Project ID and Web API Key.
+Once you have created a project, go to Project Settings (In the Settings cog on the Firebase project console) and take note of the Project ID and Web API Key.
 
 #### Client ID, Client Secret
 
-We need to create an identifier to authenticate the app with Google's backend. Go [here](https://console.cloud.google.com/apis/credentials), select your project in the top left dropdown (TODO image), and create a new OAuth2 credential. Name it something recognisable, and make note of the Client ID and Client Secret once it is generated.
+We need to create an identifier to authenticate the app with Google's backend. Go [here](https://console.cloud.google.com/apis/credentials), select your project in the top left dropdown and create a new OAuth2 credential. Name it something recognisable, and make note of the Client ID and Client Secret once it is generated.
 
 NOTE: I have only tested with Desktop clients.
 
